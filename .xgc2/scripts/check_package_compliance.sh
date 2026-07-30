@@ -95,6 +95,10 @@ grep -q 'libxgc2-camera-dev (>= 0.1.0-7~focal)' \
   .xgc2/scripts/package_debs.sh
 grep -q 'ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp' \
   .xgc2/scripts/package_debs.sh
+grep -q 'ros-noetic-foxglove-msgs ros-noetic-image-transport' \
+  .xgc2/scripts/build_debs_in_docker.sh
+grep -q 'ros-noetic-sensor-msgs ros-noetic-xgc2-camera-msgs' \
+  .xgc2/scripts/build_debs_in_docker.sh
 if grep -R -E 'xgc_camera_calibration|xgc2-camera-(intrinsic|extrinsic)|xgc2-camera-calibration-ros1.json' \
   .xgc2/scripts/build_debs_in_docker.sh .xgc2/scripts/package_debs.sh \
   .xgc2/scripts/check_installed_packages.sh >/dev/null; then

@@ -43,9 +43,10 @@ docker run --rm \
       python3-nose python3-rospkg \
       ros-noetic-camera-info-manager ros-noetic-cv-bridge \
       ros-noetic-diagnostic-msgs ros-noetic-diagnostic-updater \
-      ros-noetic-image-transport ros-noetic-roscpp ros-noetic-roslaunch \
+      ros-noetic-foxglove-msgs ros-noetic-image-transport \
+      ros-noetic-roscpp ros-noetic-roslaunch \
       ros-noetic-rospack ros-noetic-rospy ros-noetic-rostest ros-noetic-rostopic \
-      ros-noetic-sensor-msgs
+      ros-noetic-sensor-msgs ros-noetic-xgc2-camera-msgs
     rm -rf /workspace/work/src /workspace/work/build /workspace/work/devel /workspace/work/install-root
     mkdir -p /workspace/work/src/xgc_camera_driver
     rsync -a --delete /workspace/repo/xgc_camera_driver/ /workspace/work/src/xgc_camera_driver/
