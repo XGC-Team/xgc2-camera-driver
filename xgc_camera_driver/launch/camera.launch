@@ -11,9 +11,14 @@
   <arg name="capture_mode" default="auto" />
   <arg name="output_encoding" default="bgr8" />
   <arg name="camera_name" default="usb_cam" />
+  <arg name="stream_id" default="$(arg camera_name)" />
   <arg name="frame_id" default="usb_cam_optical_frame" />
   <arg name="camera_info_url" default="" />
   <arg name="buffer_count" default="4" />
+  <arg name="encoded_queue_capacity" default="8" />
+  <arg name="publish_encoded" default="true" />
+  <arg name="raw_publish_mode" default="on_demand" />
+  <arg name="unknown_timestamp_clock" default="reject" />
   <arg name="capture_timeout_ms" default="2000" />
   <arg name="synthetic_seed" default="1" />
   <arg name="respawn" default="false" />
@@ -34,9 +39,14 @@
       <param name="capture_mode" value="$(arg capture_mode)" />
       <param name="output_encoding" value="$(arg output_encoding)" />
       <param name="camera_name" value="$(arg camera_name)" />
+      <param name="stream_id" value="$(arg stream_id)" />
       <param name="frame_id" value="$(arg frame_id)" />
       <param name="camera_info_url" value="$(arg camera_info_url)" />
       <param name="buffer_count" value="$(arg buffer_count)" />
+      <param name="encoded_queue_capacity" value="$(arg encoded_queue_capacity)" />
+      <param name="publish_encoded" value="$(arg publish_encoded)" />
+      <param name="raw_publish_mode" value="$(arg raw_publish_mode)" />
+      <param name="unknown_timestamp_clock" value="$(arg unknown_timestamp_clock)" />
       <param name="capture_timeout_ms" value="$(arg capture_timeout_ms)" />
       <param name="synthetic_seed" value="$(arg synthetic_seed)" />
     </node>

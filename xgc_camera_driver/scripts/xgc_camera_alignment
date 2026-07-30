@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Create a versioned, non-destructive camera/scene time alignment artifact."""
+
+import argparse
+import glob
+import hashlib
+import json
+import math
+import os
+import re
+import tempfile
+from fractions import Fraction
+from datetime import datetime, timezone
+
+
+def _nanoseconds(value):
+    return int(value.secs) * 1_000_000_000 + int(value.nsecs)
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fsync_directory(directory):
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _source_identity(path):
+    status = os.stat(path)
+    return {
+        "device": status.st_dev,
+        "inode": status.st_ino,
+        "sizeBytes": status.st_size,
+        "mtimeNs": status.st_mtime_ns,
+    }
+
+
+def _natural_key(path):
+    return [
+        int(part) if part.isdigit() else part
+        for part in re.split(r"(\d+)", path)
+    ]
+
+
+def _verify_source_identity(path, expected):
+    if _source_identity(path) != expected:
+        raise RuntimeError(
+            "source bag changed while creating alignment: " + path
+        )
+
+
+def _publish_file(temporary, output, overwrite):
+    if overwrite:
+        os.replace(temporary, output)
+    else:
+        # link() is an atomic no-clobber publication, unlike a check followed
+        # by os.replace().
+        try:
+            os.link(temporary, output)
+        except FileExistsError:
+            raise RuntimeError(
+                "destination exists (use --overwrite): " + output
+            )
+        os.unlink(temporary)
+    _fsync_directory(os.path.dirname(output))
+
+
+def _parse_anchor(text):
+    try:
+        image, scene = text.split(":", 1)
+        return int(image), int(scene)
+    except (ValueError, TypeError):
+        raise argparse.ArgumentTypeError(
+            "anchor must be IMAGE_TIME_NS:SCENE_TIME_NS"
+        )
+
+
+def _alignment_model(delay_ms, anchors):
+    if delay_ms is not None and anchors:
+        raise RuntimeError("--image-delay-ms and --anchor are mutually exclusive")
+    if delay_ms is not None:
+        if not math.isfinite(delay_ms):
+            raise RuntimeError("--image-delay-ms must be finite")
+        offset = -int(round(delay_ms * 1_000_000.0))
+        return {
+            "kind": "constant-offset",
+            "equation": "scene_time_ns = image_time_ns + offset_ns",
+            "offsetNs": offset,
+            "assumption": "camera delay is stable over this session",
+        }
+    if len(anchors) < 2:
+        raise RuntimeError("provide --image-delay-ms or at least two --anchor values")
+    anchors = sorted(anchors)
+    if any(
+        anchors[index][0] <= anchors[index - 1][0]
+        or anchors[index][1] <= anchors[index - 1][1]
+        for index in range(1, len(anchors))
+    ):
+        raise RuntimeError("alignment anchors must increase in both clock domains")
+    if len(anchors) == 2:
+        image_delta = anchors[1][0] - anchors[0][0]
+        scene_delta = anchors[1][1] - anchors[0][1]
+        scale = Fraction(scene_delta, image_delta)
+        offset = Fraction(anchors[0][1], 1) - scale * anchors[0][0]
+        return {
+            "kind": "affine",
+            "equation": (
+                "scene_time_ns = scene_origin_ns + "
+                "(image_time_ns - image_origin_ns) * "
+                "scale_numerator / scale_denominator"
+            ),
+            "imageOriginNs": anchors[0][0],
+            "sceneOriginNs": anchors[0][1],
+            "scaleNumerator": scale.numerator,
+            "scaleDenominator": scale.denominator,
+            "scale": float(scale),
+            "offsetNs": round(offset),
+            "driftPpm": float((scale - 1) * 1_000_000),
+            "anchors": [
+                {"imageTimeNs": image, "sceneTimeNs": scene}
+                for image, scene in anchors
+            ],
+        }
+    return {
+        "kind": "piecewise-linear",
+        "equation": "linear interpolation between adjacent anchors",
+        "anchors": [
+            {"imageTimeNs": image, "sceneTimeNs": scene}
+            for image, scene in anchors
+        ],
+    }
+
+
+def create_alignment(args):
+    import rosbag
+
+    bag_paths = sorted(
+        {
+            os.path.realpath(path)
+            for pattern in args.bags
+            for path in (glob.glob(pattern) or [pattern])
+            if os.path.isfile(path)
+        },
+        key=_natural_key,
+    )
+    if not bag_paths:
+        raise RuntimeError("no ROS bag files matched")
+    source_identities = {
+        path: _source_identity(path) for path in bag_paths
+    }
+    valid_timing_frames = 0
+    minimum_image_time_ns = None
+    maximum_image_time_ns = None
+    maximum_mapping_uncertainty_ns = 0
+    streams = set()
+    epochs = set()
+    for bag_path in bag_paths:
+        with rosbag.Bag(bag_path, "r") as bag:
+            for _, message, _ in bag.read_messages(topics=[args.timing_topic]):
+                if not bool(message.source_time_valid):
+                    continue
+                image_time_ns = _nanoseconds(message.source_time)
+                uncertainty_ns = int(message.mapping_uncertainty_ns)
+                valid_timing_frames += 1
+                minimum_image_time_ns = (
+                    image_time_ns
+                    if minimum_image_time_ns is None
+                    else min(minimum_image_time_ns, image_time_ns)
+                )
+                maximum_image_time_ns = (
+                    image_time_ns
+                    if maximum_image_time_ns is None
+                    else max(maximum_image_time_ns, image_time_ns)
+                )
+                maximum_mapping_uncertainty_ns = max(
+                    maximum_mapping_uncertainty_ns, uncertainty_ns
+                )
+                streams.add(str(message.stream_id))
+                epochs.add(int(message.epoch))
+    if valid_timing_frames == 0:
+        raise RuntimeError("timing topic contains no valid source timestamps")
+    model = _alignment_model(args.image_delay_ms, args.anchor)
+    output = os.path.realpath(args.output)
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    same_source = any(
+        os.path.exists(output) and os.path.samefile(output, path)
+        for path in bag_paths
+    )
+    if output in bag_paths or same_source:
+        raise RuntimeError("output must not replace a source bag: " + output)
+    artifact = {
+        "schema": "xgc.camera.alignment/v1",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "timingTopic": args.timing_topic,
+        "streams": sorted(streams),
+        "epochs": sorted(epochs),
+        "validTimingFrames": valid_timing_frames,
+        "imageTimeRangeNs": [
+            minimum_image_time_ns,
+            maximum_image_time_ns,
+        ],
+        "maximumClockMappingUncertaintyNs": (
+            maximum_mapping_uncertainty_ns
+        ),
+        "model": model,
+        "provenance": {
+            "method": args.method,
+            "note": args.note,
+            "rawBagsImmutable": True,
+            "bags": [],
+        },
+    }
+    for path in bag_paths:
+        _verify_source_identity(path, source_identities[path])
+        digest = _sha256(path)
+        _verify_source_identity(path, source_identities[path])
+        artifact["provenance"]["bags"].append(
+            {
+                "path": path,
+                "sizeBytes": source_identities[path]["sizeBytes"],
+                "sha256": digest,
+            }
+        )
+    directory = os.path.dirname(output)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=".alignment-", suffix=".part", dir=directory
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            # JSON is a strict YAML 1.2 subset and avoids adding a runtime
+            # dependency merely to materialize alignment.yaml.
+            json.dump(artifact, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        for path in bag_paths:
+            _verify_source_identity(path, source_identities[path])
+        _publish_file(temporary, output, args.overwrite)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return artifact
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Write versioned camera-to-scene time alignment without modifying bags"
+    )
+    parser.add_argument("bags", nargs="+", help="bag paths or glob patterns")
+    parser.add_argument(
+        "--timing-topic",
+        default="/xgc/camera/world/frame_timing",
+    )
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--image-delay-ms", type=float)
+    parser.add_argument(
+        "--anchor", action="append", type=_parse_anchor, default=[]
+    )
+    parser.add_argument(
+        "--method",
+        default="manual",
+        choices=["manual", "flash", "motion", "cross-correlation"],
+    )
+    parser.add_argument("--note", default="")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+    try:
+        artifact = create_alignment(args)
+    except Exception as error:
+        parser.exit(1, "xgc_camera_alignment: " + str(error) + "\n")
+    print(json.dumps(artifact["model"], sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

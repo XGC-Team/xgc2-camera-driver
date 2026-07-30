@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-camera-ros1
 name: XGC2 ROS1 Camera Driver
-version: 0.3.0-7
+version: 0.3.0-8
 kind: ros1-apt
 summary: ROS Noetic adapter for the independently released XGC2 Linux camera core.
 ros:
@@ -26,16 +26,19 @@ apt:
   - libopencv-imgcodecs4.2
   - libopencv-imgproc4.2
   - libswscale5
-  - libxgc2-camera-dev (>= 0.1.0-1~focal)
+  - libxgc2-camera-dev (>= 0.1.0-7~focal)
   - ros-noetic-camera-info-manager
   - ros-noetic-cv-bridge
   - ros-noetic-diagnostic-msgs
   - ros-noetic-diagnostic-updater
+  - ros-noetic-foxglove-msgs
   - ros-noetic-image-transport
   - ros-noetic-roscpp
   - ros-noetic-roslaunch
+  - ros-noetic-rosbag
   - ros-noetic-rostopic
   - ros-noetic-sensor-msgs
+  - ros-noetic-xgc2-camera-msgs
 usage:
   install: 'sudo apt update
 
@@ -47,11 +50,15 @@ usage:
     rostopic echo -n 1 /usb_cam/camera_info
 
     '
-  notes: 'One process owns one camera and publishes synchronized Image and CameraInfo
+  notes: 'One process owns one camera. Native H264 is forwarded without
 
-    messages plus diagnostics. Calibration tools are released independently by
+    re-encoding as foxglove_msgs/CompressedVideo; native MJPEG is forwarded as
 
-    the xgc2-camera-calibration-ros1 product.
+    sensor_msgs/CompressedImage. Raw Image decoding is on-demand. FrameTiming,
+
+    StreamInfo, CameraInfo, and diagnostics preserve the scientific timing
+
+    contract. Calibration tools are released independently.
 
     '
 ownership:
@@ -68,4 +75,4 @@ release:
   workflow: release.yml
   ci_workflow: ci.yml
   apt_versions:
-    focal: 0.3.0-7
+    focal: 0.3.0-8

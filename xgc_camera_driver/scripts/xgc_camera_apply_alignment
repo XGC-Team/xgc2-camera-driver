@@ -1,0 +1,742 @@
+#!/usr/bin/env python3
+"""Materialize a small, aligned scene-only ROS bag.
+
+The alignment model maps image time to the corresponding physical scene time.
+This tool applies the inverse mapping to selected scene/TF messages, placing
+them on the image timeline. Camera/image topics are rejected by default, so the
+large immutable source bag is never duplicated accidentally.
+"""
+
+import argparse
+import collections
+import copy
+import glob
+import hashlib
+import json
+import os
+import re
+import tempfile
+import uuid
+from datetime import datetime, timezone
+from fractions import Fraction
+
+
+_NANOSECONDS_PER_SECOND = 1_000_000_000
+_MAXIMUM_ROS1_TIME_NS = (2**32) * _NANOSECONDS_PER_SECOND - 1
+
+
+def _nanoseconds(value):
+    return (
+        int(value.secs) * _NANOSECONDS_PER_SECOND + int(value.nsecs)
+    )
+
+
+def _time_from_nanoseconds(prototype, value):
+    if value < 0 or value > _MAXIMUM_ROS1_TIME_NS:
+        raise RuntimeError(
+            "aligned timestamp is outside the ROS 1 time range: "
+            + str(value)
+        )
+    return type(prototype)(
+        int(value // _NANOSECONDS_PER_SECOND),
+        int(value % _NANOSECONDS_PER_SECOND),
+    )
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fsync_file(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(directory):
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _natural_key(path):
+    return [
+        int(part) if part.isdigit() else part
+        for part in re.split(r"(\d+)", path)
+    ]
+
+
+def _resolve_bags(patterns):
+    paths = []
+    for pattern in patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            paths.extend(matches)
+        elif os.path.isfile(pattern):
+            paths.append(pattern)
+    bags = sorted(
+        {os.path.realpath(path) for path in paths}, key=_natural_key
+    )
+    if not bags:
+        raise RuntimeError("no ROS bag files matched")
+    return bags
+
+
+def _source_identity(path):
+    status = os.stat(path)
+    return {
+        "device": status.st_dev,
+        "inode": status.st_ino,
+        "sizeBytes": status.st_size,
+        "mtimeNs": status.st_mtime_ns,
+    }
+
+
+def _verify_source_identity(path, expected):
+    if _source_identity(path) != expected:
+        raise RuntimeError(
+            "source changed while applying alignment: " + path
+        )
+
+
+def _hash_source_entries(paths, identities):
+    entries = []
+    for path in paths:
+        _verify_source_identity(path, identities[path])
+        digest = _sha256(path)
+        _verify_source_identity(path, identities[path])
+        entries.append(
+            {
+                "path": path,
+                "sizeBytes": identities[path]["sizeBytes"],
+                "sha256": digest,
+            }
+        )
+    return entries
+
+
+def _provenance_fingerprints(artifact):
+    provenance = artifact.get("provenance")
+    bags = provenance.get("bags") if isinstance(provenance, dict) else None
+    if not isinstance(bags, list) or not bags:
+        raise RuntimeError(
+            "alignment artifact has no source-bag provenance"
+        )
+    fingerprints = []
+    for entry in bags:
+        if not isinstance(entry, dict):
+            raise RuntimeError("alignment bag provenance is malformed")
+        try:
+            size = int(entry["sizeBytes"])
+            digest = str(entry["sha256"]).lower()
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError("alignment bag provenance is malformed")
+        if (
+            size < 0
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise RuntimeError("alignment bag provenance is malformed")
+        fingerprints.append((size, digest))
+    return collections.Counter(fingerprints)
+
+
+def _verify_alignment_sources(artifact, source_entries):
+    expected = _provenance_fingerprints(artifact)
+    actual = collections.Counter(
+        (entry["sizeBytes"], entry["sha256"].lower())
+        for entry in source_entries
+    )
+    if actual != expected:
+        raise RuntimeError(
+            "alignment provenance does not match the complete input bag set"
+        )
+
+
+def _parse_topic_map(value):
+    try:
+        source, destination = value.split("=", 1)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "topic map must be SOURCE_TOPIC=ALIGNED_TOPIC"
+        )
+    if (
+        not source.startswith("/")
+        or not destination.startswith("/")
+        or source == "/"
+        or destination == "/"
+    ):
+        raise argparse.ArgumentTypeError(
+            "topic map requires absolute non-root ROS topic names"
+        )
+    if source == destination:
+        raise argparse.ArgumentTypeError(
+            "aligned topic must differ from its source topic"
+        )
+    return source, destination
+
+
+def _looks_like_large_camera_topic(topic):
+    lowered = topic.lower()
+    return (
+        lowered.endswith("/video")
+        or lowered.endswith("/video_h264")
+        or "/image_raw" in lowered
+        or lowered.endswith("/compressed")
+    )
+
+
+def _validate_topic_maps(topic_map_values, allow_large_topics):
+    if not topic_map_values:
+        raise RuntimeError("at least one --topic-map is required")
+    result = {}
+    destinations = set()
+    for source, destination in topic_map_values:
+        if source in result:
+            raise RuntimeError("duplicate source topic map: " + source)
+        if destination in destinations:
+            raise RuntimeError(
+                "multiple source topics map to " + destination
+            )
+        if source == "/clock":
+            raise RuntimeError(
+                "/clock must remain owned by the source replay and cannot "
+                "be copied into an aligned scene bag"
+            )
+        if _looks_like_large_camera_topic(source) and not allow_large_topics:
+            raise RuntimeError(
+                "camera/image topic is blocked to avoid copying the large "
+                "record; pass --allow-large-topics explicitly: " + source
+            )
+        result[source] = destination
+        destinations.add(destination)
+    return result
+
+
+def _load_alignment(path):
+    with open(path, "r", encoding="utf-8") as stream:
+        artifact = json.load(stream)
+    if artifact.get("schema") != "xgc.camera.alignment/v1":
+        raise RuntimeError("unsupported alignment schema")
+    model = artifact.get("model")
+    if not isinstance(model, dict):
+        raise RuntimeError("alignment artifact has no model")
+    _validate_model(model)
+    return artifact, model
+
+
+def _validate_model(model):
+    kind = model.get("kind")
+    if kind == "constant-offset":
+        int(model["offsetNs"])
+        return
+    anchors = model.get("anchors", [])
+    if kind == "affine" and all(
+        key in model
+        for key in (
+            "imageOriginNs",
+            "sceneOriginNs",
+            "scaleNumerator",
+            "scaleDenominator",
+        )
+    ):
+        int(model["imageOriginNs"])
+        int(model["sceneOriginNs"])
+        if (
+            int(model["scaleNumerator"]) <= 0
+            or int(model["scaleDenominator"]) <= 0
+        ):
+            raise RuntimeError("affine scale must be positive")
+    elif kind == "affine" and len(anchors) != 2:
+        raise RuntimeError(
+            "affine model lacks exact scale fields or two anchors"
+        )
+    elif kind == "piecewise-linear" and len(anchors) < 3:
+        raise RuntimeError("piecewise model requires at least three anchors")
+    elif kind not in ("affine", "piecewise-linear"):
+        raise RuntimeError(
+            "unsupported alignment model kind: " + repr(kind)
+        )
+    if anchors:
+        pairs = [
+            (
+                int(anchor["imageTimeNs"]),
+                int(anchor["sceneTimeNs"]),
+            )
+            for anchor in anchors
+        ]
+        if any(
+            pairs[index][0] <= pairs[index - 1][0]
+            or pairs[index][1] <= pairs[index - 1][1]
+            for index in range(1, len(pairs))
+        ):
+            raise RuntimeError(
+                "alignment anchors must increase in both clock domains"
+            )
+        if kind == "affine" and all(
+            key in model
+            for key in (
+                "imageOriginNs",
+                "sceneOriginNs",
+                "scaleNumerator",
+                "scaleDenominator",
+            )
+        ):
+            if len(pairs) != 2:
+                raise RuntimeError(
+                    "exact affine model must retain its two anchors"
+                )
+            expected_scale = Fraction(
+                pairs[1][1] - pairs[0][1],
+                pairs[1][0] - pairs[0][0],
+            )
+            declared_scale = Fraction(
+                int(model["scaleNumerator"]),
+                int(model["scaleDenominator"]),
+            )
+            if (
+                pairs[0][0] != int(model["imageOriginNs"])
+                or pairs[0][1] != int(model["sceneOriginNs"])
+                or expected_scale != declared_scale
+            ):
+                raise RuntimeError(
+                    "affine origins/scale do not match its anchors"
+                )
+
+
+def _segment_inverse(image0, scene0, image1, scene1, scene_time_ns):
+    scene_delta = scene1 - scene0
+    image_delta = image1 - image0
+    if scene_delta <= 0 or image_delta <= 0:
+        raise RuntimeError("alignment anchors must increase")
+    return image0 + round(
+        Fraction(
+            (scene_time_ns - scene0) * image_delta,
+            scene_delta,
+        )
+    )
+
+
+def _scene_to_image_time(model, scene_time_ns, allow_extrapolation=False):
+    kind = model.get("kind")
+    if kind == "constant-offset":
+        return scene_time_ns - int(model["offsetNs"])
+    if kind == "affine":
+        if all(
+            key in model
+            for key in (
+                "imageOriginNs",
+                "sceneOriginNs",
+                "scaleNumerator",
+                "scaleDenominator",
+            )
+        ):
+            numerator = int(model["scaleNumerator"])
+            denominator = int(model["scaleDenominator"])
+            if numerator <= 0 or denominator <= 0:
+                raise RuntimeError("affine scale must be positive")
+            return int(model["imageOriginNs"]) + round(
+                Fraction(
+                    (scene_time_ns - int(model["sceneOriginNs"]))
+                    * denominator,
+                    numerator,
+                )
+            )
+        anchors = model.get("anchors", [])
+        if len(anchors) != 2:
+            raise RuntimeError(
+                "affine model lacks exact scale fields or two anchors"
+            )
+        return _segment_inverse(
+            int(anchors[0]["imageTimeNs"]),
+            int(anchors[0]["sceneTimeNs"]),
+            int(anchors[1]["imageTimeNs"]),
+            int(anchors[1]["sceneTimeNs"]),
+            scene_time_ns,
+        )
+    if kind == "piecewise-linear":
+        anchors = model.get("anchors", [])
+        if len(anchors) < 3:
+            raise RuntimeError("piecewise model requires at least three anchors")
+        for index in range(1, len(anchors)):
+            left = anchors[index - 1]
+            right = anchors[index]
+            left_scene = int(left["sceneTimeNs"])
+            right_scene = int(right["sceneTimeNs"])
+            if left_scene <= scene_time_ns <= right_scene:
+                return _segment_inverse(
+                    int(left["imageTimeNs"]),
+                    left_scene,
+                    int(right["imageTimeNs"]),
+                    right_scene,
+                    scene_time_ns,
+                )
+        if not allow_extrapolation:
+            raise RuntimeError(
+                "scene timestamp is outside piecewise anchors; "
+                "add anchors or pass --allow-extrapolation"
+            )
+        left, right = (
+            (anchors[0], anchors[1])
+            if scene_time_ns < int(anchors[0]["sceneTimeNs"])
+            else (anchors[-2], anchors[-1])
+        )
+        return _segment_inverse(
+            int(left["imageTimeNs"]),
+            int(left["sceneTimeNs"]),
+            int(right["imageTimeNs"]),
+            int(right["sceneTimeNs"]),
+            scene_time_ns,
+        )
+    raise RuntimeError("unsupported alignment model kind: " + repr(kind))
+
+
+def _shift_message_times(message, model, allow_extrapolation, statistics):
+    slots = getattr(message, "__slots__", ())
+    slot_types = getattr(message, "_slot_types", ())
+    for slot, slot_type in zip(slots, slot_types):
+        value = getattr(message, slot)
+        if slot_type == "time":
+            original = _nanoseconds(value)
+            if original == 0:
+                statistics["zeroTimeFieldsPreserved"] += 1
+                continue
+            aligned = _scene_to_image_time(
+                model, original, allow_extrapolation
+            )
+            setattr(message, slot, _time_from_nanoseconds(value, aligned))
+            statistics["timeFieldsShifted"] += 1
+            continue
+        if slot_type.startswith("time[") and isinstance(value, (list, tuple)):
+            shifted_values = []
+            for item in value:
+                original = _nanoseconds(item)
+                if original == 0:
+                    statistics["zeroTimeFieldsPreserved"] += 1
+                    shifted_values.append(item)
+                else:
+                    aligned = _scene_to_image_time(
+                        model, original, allow_extrapolation
+                    )
+                    shifted_values.append(
+                        _time_from_nanoseconds(item, aligned)
+                    )
+                    statistics["timeFieldsShifted"] += 1
+            setattr(
+                message,
+                slot,
+                tuple(shifted_values)
+                if isinstance(value, tuple)
+                else shifted_values,
+            )
+            continue
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                if hasattr(item, "__slots__"):
+                    _shift_message_times(
+                        item, model, allow_extrapolation, statistics
+                    )
+        elif hasattr(value, "__slots__"):
+            _shift_message_times(
+                value, model, allow_extrapolation, statistics
+            )
+
+
+def _publish_bundle(items, overwrite):
+    directory = os.path.dirname(items[0][1])
+    for _, destination in items:
+        if os.path.lexists(destination) and not overwrite:
+            raise RuntimeError(
+                "destination exists (use --overwrite): " + destination
+            )
+    backups = {}
+    published = []
+    committed = False
+    try:
+        if overwrite:
+            for _, destination in items:
+                if os.path.lexists(destination):
+                    backup = os.path.join(
+                        directory,
+                        ".xgc-alignment-backup-" + uuid.uuid4().hex,
+                    )
+                    os.replace(destination, backup)
+                    backups[destination] = backup
+            for temporary, destination in items:
+                os.replace(temporary, destination)
+                published.append(destination)
+        else:
+            for temporary, destination in items:
+                os.link(temporary, destination)
+                published.append(destination)
+                os.unlink(temporary)
+        _fsync_directory(directory)
+        committed = True
+    except Exception:
+        for destination in reversed(published):
+            try:
+                os.unlink(destination)
+            except FileNotFoundError:
+                pass
+        for destination, backup in backups.items():
+            if os.path.exists(backup):
+                os.replace(backup, destination)
+        _fsync_directory(directory)
+        raise
+    finally:
+        for temporary, _ in items:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        if committed:
+            for backup in backups.values():
+                if os.path.exists(backup):
+                    os.unlink(backup)
+            _fsync_directory(directory)
+
+
+def _bag_entry_parts(entry):
+    try:
+        return (
+            entry.topic,
+            entry.message,
+            entry.timestamp,
+            getattr(entry, "connection_header", None),
+        )
+    except AttributeError:
+        return (
+            entry[0],
+            entry[1],
+            entry[2],
+            entry[3] if len(entry) > 3 else None,
+        )
+
+
+def apply_alignment(args):
+    import rosbag
+
+    bags = _resolve_bags(args.bags)
+    topic_map = _validate_topic_maps(
+        args.topic_map, args.allow_large_topics
+    )
+    alignment_path = os.path.realpath(args.alignment)
+    alignment_identity = _source_identity(alignment_path)
+    artifact, model = _load_alignment(alignment_path)
+    _verify_source_identity(alignment_path, alignment_identity)
+    output = os.path.realpath(args.output)
+    if not output.lower().endswith(".bag"):
+        raise RuntimeError("output must end in .bag")
+    manifest_path = output + ".manifest.json"
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    for source in bags + [alignment_path]:
+        if output == source or manifest_path == source:
+            raise RuntimeError("output must not replace an input: " + source)
+        same_file = any(
+            os.path.exists(destination)
+            and os.path.samefile(destination, source)
+            for destination in (output, manifest_path)
+        )
+        if same_file:
+            raise RuntimeError("output must not replace an input: " + source)
+    for destination in (output, manifest_path):
+        if os.path.lexists(destination) and not args.overwrite:
+            raise RuntimeError(
+                "destination exists (use --overwrite): " + destination
+            )
+
+    identities = {path: _source_identity(path) for path in bags}
+    identities[alignment_path] = alignment_identity
+    source_entries = _hash_source_entries(bags, identities)
+    _verify_alignment_sources(artifact, source_entries)
+    _verify_source_identity(
+        alignment_path, identities[alignment_path]
+    )
+    statistics = {
+        "messagesCopied": 0,
+        "timeFieldsShifted": 0,
+        "zeroTimeFieldsPreserved": 0,
+    }
+    per_topic = {source: 0 for source in topic_map}
+    original_range = [None, None]
+    aligned_range = [None, None]
+
+    descriptor, temporary_bag = tempfile.mkstemp(
+        prefix=".xgc-aligned-scene-", suffix=".bag.part",
+        dir=os.path.dirname(output),
+    )
+    os.close(descriptor)
+    os.unlink(temporary_bag)
+    descriptor, temporary_manifest = tempfile.mkstemp(
+        prefix=".xgc-aligned-scene-", suffix=".manifest.part",
+        dir=os.path.dirname(output),
+    )
+    os.close(descriptor)
+    try:
+        with rosbag.Bag(temporary_bag, "w") as destination_bag:
+            for bag_path in bags:
+                with rosbag.Bag(bag_path, "r") as source_bag:
+                    entries = source_bag.read_messages(
+                        topics=list(topic_map),
+                        return_connection_header=True,
+                    )
+                    for entry in entries:
+                        topic, message, bag_time, connection_header = (
+                            _bag_entry_parts(entry)
+                        )
+                        original_ns = _nanoseconds(bag_time)
+                        aligned_ns = _scene_to_image_time(
+                            model,
+                            original_ns,
+                            args.allow_extrapolation,
+                        )
+                        aligned_time = _time_from_nanoseconds(
+                            bag_time, aligned_ns
+                        )
+                        shifted = copy.deepcopy(message)
+                        _shift_message_times(
+                            shifted,
+                            model,
+                            args.allow_extrapolation,
+                            statistics,
+                        )
+                        output_topic = topic_map[topic]
+                        header = (
+                            dict(connection_header)
+                            if connection_header
+                            else None
+                        )
+                        if header is not None and "topic" in header:
+                            header["topic"] = output_topic
+                        destination_bag.write(
+                            output_topic,
+                            shifted,
+                            t=aligned_time,
+                            connection_header=header,
+                        )
+                        statistics["messagesCopied"] += 1
+                        per_topic[topic] += 1
+                        original_range[0] = (
+                            original_ns
+                            if original_range[0] is None
+                            else min(original_range[0], original_ns)
+                        )
+                        original_range[1] = (
+                            original_ns
+                            if original_range[1] is None
+                            else max(original_range[1], original_ns)
+                        )
+                        aligned_range[0] = (
+                            aligned_ns
+                            if aligned_range[0] is None
+                            else min(aligned_range[0], aligned_ns)
+                        )
+                        aligned_range[1] = (
+                            aligned_ns
+                            if aligned_range[1] is None
+                            else max(aligned_range[1], aligned_ns)
+                        )
+        if statistics["messagesCopied"] == 0:
+            raise RuntimeError("selected scene topics contain no messages")
+        _fsync_file(temporary_bag)
+
+        _verify_source_identity(
+            alignment_path, identities[alignment_path]
+        )
+        manifest = {
+            "schema": "xgc.camera.aligned-scene-bag/v1",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "scientificSourcesImmutable": True,
+            "alignmentSourceSetVerified": True,
+            "alignment": {
+                "path": alignment_path,
+                "sha256": _sha256(alignment_path),
+                "schema": artifact["schema"],
+                "model": model,
+            },
+            "sourceBags": source_entries,
+            "topicMap": topic_map,
+            "statistics": statistics,
+            "messagesPerSourceTopic": per_topic,
+            "originalSceneTimeRangeNs": original_range,
+            "alignedImageTimeRangeNs": aligned_range,
+            "allowExtrapolation": bool(args.allow_extrapolation),
+            "allowLargeTopics": bool(args.allow_large_topics),
+            "derivedBag": {
+                "path": output,
+                "sizeBytes": os.path.getsize(temporary_bag),
+                "sha256": _sha256(temporary_bag),
+            },
+        }
+        with open(temporary_manifest, "w", encoding="utf-8") as stream:
+            json.dump(manifest, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        for path in bags + [alignment_path]:
+            _verify_source_identity(path, identities[path])
+        _publish_bundle(
+            [
+                (temporary_manifest, manifest_path),
+                # The bag is the commit marker and is published last.
+                (temporary_bag, output),
+            ],
+            args.overwrite,
+        )
+        return manifest
+    finally:
+        for temporary in (temporary_bag, temporary_manifest):
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Create a small aligned scene/TF bag without modifying or "
+            "copying the recorded camera stream"
+        )
+    )
+    parser.add_argument("bags", nargs="+", help="source bag paths or globs")
+    parser.add_argument("--alignment", required=True)
+    parser.add_argument("--output", required=True, help="derived .bag path")
+    parser.add_argument(
+        "--topic-map",
+        action="append",
+        type=_parse_topic_map,
+        default=[],
+        metavar="SOURCE=ALIGNED",
+        help=(
+            "scene topic to copy and its distinct aligned output topic; "
+            "repeat for TF/scene topics"
+        ),
+    )
+    parser.add_argument(
+        "--allow-extrapolation",
+        action="store_true",
+        help="permit piecewise endpoint extrapolation outside anchors",
+    )
+    parser.add_argument(
+        "--allow-large-topics",
+        action="store_true",
+        help="explicitly permit image/video topic copying",
+    )
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+    try:
+        manifest = apply_alignment(args)
+    except Exception as error:
+        parser.exit(
+            1, "xgc_camera_apply_alignment: " + str(error) + "\n"
+        )
+    print(json.dumps(manifest["derivedBag"], sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

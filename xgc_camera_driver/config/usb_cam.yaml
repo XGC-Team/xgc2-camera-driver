@@ -7,8 +7,15 @@ pixel_format: mjpeg
 capture_mode: auto
 output_encoding: bgr8
 camera_name: usb_cam
+stream_id: usb_cam
 frame_id: usb_cam_optical_frame
 camera_info_url: ""
 capture_timeout_ms: 2000
 buffer_count: 4
+encoded_queue_capacity: 8
+publish_encoded: true
+raw_publish_mode: on_demand
+# Unknown V4L2 clock flags are never guessed. Set assume_monotonic or
+# assume_realtime only after verifying the camera driver contract.
+unknown_timestamp_clock: reject
 synthetic_seed: 1

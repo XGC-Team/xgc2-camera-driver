@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+"""Export recorded foxglove_msgs/CompressedVideo H.264 without transcoding.
+
+The ROS bag remains the scientific source of truth. The generated timing CSV
+preserves every ROS/source timestamp while MKV/MP4 is a constant-rate viewing
+derivative muxed with ``-c:v copy``.
+"""
+
+import argparse
+import collections
+import csv
+import glob
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
+import uuid
+from datetime import datetime, timezone
+
+
+_TimingRecord = collections.namedtuple(
+    "_TimingRecord",
+    (
+        "epoch",
+        "frame_sequence",
+        "source_sequence",
+        "native_source_time_ns",
+        "discontinuity",
+        "dropped_frames_before",
+        "encoded_size_bytes",
+        "keyframe",
+    ),
+)
+
+
+def _nanoseconds(value):
+    return int(value.secs) * 1_000_000_000 + int(value.nsecs)
+
+
+def _nal_types(payload):
+    payload = bytes(payload)
+    result = []
+    index = 0
+    first_start_code = None
+    while index + 3 <= len(payload):
+        prefix = 0
+        if payload[index : index + 3] == b"\x00\x00\x01":
+            prefix = 3
+        elif payload[index : index + 4] == b"\x00\x00\x00\x01":
+            prefix = 4
+        if prefix:
+            if first_start_code is None:
+                first_start_code = index
+            nal = index + prefix
+            if nal < len(payload):
+                result.append(payload[nal] & 0x1F)
+            index = nal + 1
+        else:
+            index += 1
+    return result if first_start_code == 0 else []
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _fsync_directory(directory):
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _stage_copy(source, directory):
+    descriptor, destination = tempfile.mkstemp(
+        prefix=".xgc-camera-export-", suffix=".part", dir=directory
+    )
+    try:
+        with open(source, "rb") as input_stream, os.fdopen(
+            descriptor, "wb"
+        ) as output_stream:
+            descriptor = -1
+            shutil.copyfileobj(input_stream, output_stream, 1024 * 1024)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        return destination
+    except Exception:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if os.path.exists(destination):
+            os.unlink(destination)
+        raise
+
+
+def _publish_bundle(items, overwrite):
+    """Publish sidecars first and video last, rolling back process failures.
+
+    ``items`` is ordered. Every staged file lives beside its destination, so
+    the final operation is either a same-filesystem rename or a no-clobber
+    hard-link. There is no portable multi-file transaction; the video is the
+    commit marker and the manifest contains hashes for both derivatives.
+    """
+
+    if not items:
+        return
+    directory = os.path.dirname(items[0][1])
+    if any(os.path.dirname(destination) != directory for _, destination in items):
+        raise RuntimeError("all export outputs must share one directory")
+    for _, destination in items:
+        if os.path.lexists(destination) and not overwrite:
+            raise RuntimeError(
+                "destination exists (use --overwrite): " + destination
+            )
+
+    staged = []
+    backups = {}
+    published = []
+    committed = False
+    try:
+        staged = [
+            (_stage_copy(source, directory), destination)
+            for source, destination in items
+        ]
+        if overwrite:
+            for _, destination in staged:
+                if os.path.lexists(destination):
+                    backup = os.path.join(
+                        directory,
+                        ".xgc-camera-export-backup-" + uuid.uuid4().hex,
+                    )
+                    os.replace(destination, backup)
+                    backups[destination] = backup
+            for source, destination in staged:
+                os.replace(source, destination)
+                published.append(destination)
+        else:
+            for source, destination in staged:
+                # Unlike os.replace(), link() never overwrites a file that
+                # appeared after the preflight check.
+                os.link(source, destination)
+                published.append(destination)
+                os.unlink(source)
+        _fsync_directory(directory)
+        committed = True
+    except Exception:
+        for destination in reversed(published):
+            try:
+                os.unlink(destination)
+            except FileNotFoundError:
+                pass
+        for destination, backup in backups.items():
+            if os.path.exists(backup):
+                os.replace(backup, destination)
+        _fsync_directory(directory)
+        raise
+    finally:
+        for source, _ in staged:
+            if os.path.exists(source):
+                os.unlink(source)
+        if committed:
+            for backup in backups.values():
+                if os.path.exists(backup):
+                    os.unlink(backup)
+            _fsync_directory(directory)
+
+
+def _natural_key(path):
+    return [
+        int(part) if part.isdigit() else part
+        for part in re.split(r"(\d+)", path)
+    ]
+
+
+def _source_identity(path):
+    status = os.stat(path)
+    return {
+        "device": status.st_dev,
+        "inode": status.st_ino,
+        "sizeBytes": status.st_size,
+        "mtimeNs": status.st_mtime_ns,
+    }
+
+
+def _verify_source_identity(path, expected):
+    if _source_identity(path) != expected:
+        raise RuntimeError("source bag changed while exporting: " + path)
+
+
+def _reject_source_output_overlap(bags, destinations):
+    sources = set(bags)
+    for destination in destinations:
+        same_file = any(
+            os.path.exists(destination)
+            and os.path.samefile(destination, source)
+            for source in bags
+        )
+        if os.path.realpath(destination) in sources or same_file:
+            raise RuntimeError(
+                "output must not replace a source bag: " + destination
+            )
+
+
+def _timing_row(timing):
+    return {
+        "epoch": int(timing.epoch),
+        "frame_sequence": int(timing.frame_sequence),
+        "source_sequence": int(timing.source_sequence),
+        "native_source_time_ns": int(timing.native_source_time_ns),
+        "discontinuity": int(timing.discontinuity),
+        "dropped_frames_before": int(timing.dropped_frames_before),
+    }
+
+
+def _pop_matching_timing(queue, encoded_size, keyframe):
+    if not queue:
+        return None
+    signed = False
+    for index, timing in enumerate(queue):
+        timing_size = int(getattr(timing, "encoded_size_bytes", 0))
+        if timing_size > 0:
+            signed = True
+        if (
+            timing_size == encoded_size
+            and bool(getattr(timing, "keyframe", keyframe)) == keyframe
+        ):
+            match = timing
+            del queue[index]
+            return match
+    # Older timing records may lack size/keyframe. A unique timestamp is still
+    # unambiguous; duplicates without a signature are deliberately left
+    # unmatched instead of assigning the wrong frame sequence.
+    if not signed and len(queue) == 1:
+        return queue.pop(0)
+    return None
+
+
+def _read_timing_messages(rosbag, bags, topic):
+    by_timestamp = {}
+    count = 0
+    if not topic:
+        return by_timestamp, count
+    for bag_path in bags:
+        with rosbag.Bag(bag_path, "r") as bag:
+            for _, timing, _ in bag.read_messages(topics=[topic]):
+                if hasattr(timing, "source_time_valid") and not bool(
+                    timing.source_time_valid
+                ):
+                    continue
+                timestamp_ns = _nanoseconds(timing.source_time)
+                by_timestamp.setdefault(timestamp_ns, []).append(
+                    _TimingRecord(
+                        epoch=int(timing.epoch),
+                        frame_sequence=int(timing.frame_sequence),
+                        source_sequence=int(timing.source_sequence),
+                        native_source_time_ns=int(
+                            timing.native_source_time_ns
+                        ),
+                        discontinuity=int(timing.discontinuity),
+                        dropped_frames_before=int(
+                            timing.dropped_frames_before
+                        ),
+                        encoded_size_bytes=int(
+                            getattr(timing, "encoded_size_bytes", 0)
+                        ),
+                        keyframe=bool(getattr(timing, "keyframe", False)),
+                    )
+                )
+                count += 1
+    return by_timestamp, count
+
+
+def _copy_synced(source, destination):
+    """Backward-compatible helper retained for downstream imports."""
+    with open(source, "rb") as input_stream, open(
+        destination, "xb"
+    ) as output_stream:
+        shutil.copyfileobj(input_stream, output_stream, 1024 * 1024)
+        output_stream.flush()
+        os.fsync(output_stream.fileno())
+
+
+def _resolve_bags(patterns):
+    paths = []
+    for pattern in patterns:
+        matches = glob.glob(pattern)
+        if matches:
+            paths.extend(matches)
+        elif os.path.isfile(pattern):
+            paths.append(pattern)
+    unique = sorted(
+        {os.path.realpath(path) for path in paths}, key=_natural_key
+    )
+    if not unique:
+        raise RuntimeError("no ROS bag files matched")
+    for path in unique:
+        if not os.path.isfile(path):
+            raise RuntimeError("bag is not a regular file: " + path)
+    return unique
+
+
+def export(args):
+    import rosbag
+
+    bags = _resolve_bags(args.bags)
+    output = os.path.realpath(args.output)
+    extension = pathlib.Path(output).suffix.lower()
+    if extension not in (".mkv", ".mp4"):
+        raise RuntimeError("output must end in .mkv or .mp4")
+    output_directory = os.path.dirname(output)
+    os.makedirs(output_directory, exist_ok=True)
+    timing_path = output + ".timing.csv"
+    manifest_path = output + ".manifest.json"
+    destinations = (output, timing_path, manifest_path)
+    _reject_source_output_overlap(bags, destinations)
+    for destination in destinations:
+        if os.path.lexists(destination) and not args.overwrite:
+            raise RuntimeError(
+                "destination exists (use --overwrite): " + destination
+            )
+    source_identities = {
+        path: _source_identity(path) for path in bags
+    }
+
+    frame_rows = []
+    fps = args.fps
+    stream_info_topic = args.stream_info_topic
+    if not stream_info_topic:
+        root = args.video_topic.rsplit("/", 1)[0]
+        stream_info_topic = root + "/stream_info"
+    timings, timing_message_count = _read_timing_messages(
+        rosbag, bags, args.timing_topic
+    )
+    matched_timing_count = 0
+
+    with tempfile.TemporaryDirectory(prefix="xgc-camera-export-") as temporary:
+        elementary_path = os.path.join(temporary, "stream.h264")
+        waiting_for_idr = True
+        have_sps = False
+        have_pps = False
+        frame_count = 0
+        keyframe_count = 0
+        first_timestamp = None
+        last_timestamp = None
+        with open(elementary_path, "wb") as elementary:
+            for bag_path in bags:
+                with rosbag.Bag(bag_path, "r") as bag:
+                    if fps is None:
+                        for _, info, _ in bag.read_messages(
+                            topics=[stream_info_topic]
+                        ):
+                            candidate = float(info.nominal_frame_rate)
+                            if candidate > 0:
+                                fps = candidate
+                                break
+                    for _, message, bag_time in bag.read_messages(
+                        topics=[args.video_topic]
+                    ):
+                        if str(message.format).lower() not in ("h264", "avc"):
+                            raise RuntimeError(
+                                "video topic contains non-H264 format "
+                                + repr(message.format)
+                            )
+                        payload = bytes(message.data)
+                        types = _nal_types(payload)
+                        if not types:
+                            raise RuntimeError(
+                                "video message is not Annex-B H.264"
+                            )
+                        has_vcl = any(1 <= nal_type <= 5 for nal_type in types)
+                        if not has_vcl:
+                            # Parameter-set-only messages bootstrap subsequent
+                            # access units but are not video frames.
+                            have_sps = have_sps or 7 in types
+                            have_pps = have_pps or 8 in types
+                            elementary.write(payload)
+                            continue
+                        keyframe = 5 in types
+                        if waiting_for_idr:
+                            if not keyframe:
+                                continue
+                            if not (have_sps or 7 in types) or not (
+                                have_pps or 8 in types
+                            ):
+                                raise RuntimeError(
+                                    "first IDR has no preceding SPS/PPS"
+                                )
+                            waiting_for_idr = False
+                        have_sps = have_sps or 7 in types
+                        have_pps = have_pps or 8 in types
+                        elementary.write(payload)
+                        timestamp_ns = _nanoseconds(message.timestamp)
+                        first_timestamp = (
+                            timestamp_ns
+                            if first_timestamp is None
+                            else first_timestamp
+                        )
+                        last_timestamp = timestamp_ns
+                        row = {
+                            "frame": frame_count,
+                            "ros_time_ns": timestamp_ns,
+                            "bag_time_ns": _nanoseconds(bag_time),
+                            "keyframe": int(keyframe),
+                            "encoded_bytes": len(payload),
+                            "epoch": "",
+                            "frame_sequence": "",
+                            "source_sequence": "",
+                            "native_source_time_ns": "",
+                            "discontinuity": "",
+                            "dropped_frames_before": "",
+                        }
+                        # Timing messages normally precede/follow video closely,
+                        # but bags are read in record order. Exact association is
+                        # completed below when epoch/sequence are unavailable by
+                        # matching source_time.
+                        timing_queue = timings.get(timestamp_ns)
+                        timing = _pop_matching_timing(
+                            timing_queue,
+                            len(payload),
+                            keyframe,
+                        )
+                        if timing_queue is not None and not timing_queue:
+                            timings.pop(timestamp_ns, None)
+                        if timing is not None:
+                            row.update(_timing_row(timing))
+                            matched_timing_count += 1
+                        frame_rows.append(row)
+                        frame_count += 1
+                        keyframe_count += int(keyframe)
+        if frame_count == 0:
+            raise RuntimeError("no decodable H.264 IDR was found")
+        if fps is None or not (0 < fps <= 240):
+            raise RuntimeError(
+                "nominal frame rate is unavailable; pass --fps"
+            )
+
+        muxed_part = os.path.join(
+            temporary, "output" + extension + ".part"
+        )
+        command = [
+            args.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-y",
+            "-f",
+            "h264",
+            "-r",
+            format(fps, ".12g"),
+            "-i",
+            elementary_path,
+            "-map",
+            "0:v:0",
+            "-an",
+            "-c:v",
+            "copy",
+        ]
+        if extension == ".mkv":
+            command += ["-f", "matroska"]
+        else:
+            command += ["-movflags", "+faststart", "-f", "mp4"]
+        command.append(muxed_part)
+        subprocess.run(command, check=True)
+        if os.path.getsize(muxed_part) == 0:
+            raise RuntimeError("ffmpeg produced an empty container")
+
+        timing_part = os.path.join(temporary, "timing.csv.part")
+        with open(timing_part, "w", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(frame_rows[0]))
+            writer.writeheader()
+            writer.writerows(frame_rows)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        video_sha256 = _sha256(muxed_part)
+        timing_sha256 = _sha256(timing_part)
+        bag_entries = []
+        for path in bags:
+            _verify_source_identity(path, source_identities[path])
+            digest = _sha256(path)
+            _verify_source_identity(path, source_identities[path])
+            bag_entries.append(
+                {
+                    "path": path,
+                    "sizeBytes": source_identities[path]["sizeBytes"],
+                    "sha256": digest,
+                }
+            )
+        manifest = {
+            "schema": "xgc.camera.video-export/v1",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "scientificSource": "rosbag",
+            "viewingDerivative": output,
+            "codec": "h264",
+            "mux": extension[1:],
+            "transcoded": False,
+            "nominalFrameRate": fps,
+            "videoTopic": args.video_topic,
+            "timingTopic": args.timing_topic,
+            "streamInfoTopic": stream_info_topic,
+            "frames": frame_count,
+            "keyframes": keyframe_count,
+            "matchedTimingFrames": matched_timing_count,
+            "unmatchedVideoFrames": frame_count - matched_timing_count,
+            "unmatchedTimingMessages": (
+                timing_message_count - matched_timing_count
+            ),
+            "timingAssociation": (
+                "source_time_ns, then encoded_size_bytes/keyframe; "
+                "unique unsigned timestamps only"
+            ),
+            "firstRosTimeNs": first_timestamp,
+            "lastRosTimeNs": last_timestamp,
+            "derivatives": {
+                "video": {
+                    "path": output,
+                    "sizeBytes": os.path.getsize(muxed_part),
+                    "sha256": video_sha256,
+                },
+                "timing": {
+                    "path": timing_path,
+                    "sizeBytes": os.path.getsize(timing_part),
+                    "sha256": timing_sha256,
+                },
+            },
+            "bags": bag_entries,
+        }
+        manifest_part = os.path.join(temporary, "manifest.json.part")
+        with open(manifest_part, "w", encoding="utf-8") as stream:
+            json.dump(manifest, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        for path in bags:
+            _verify_source_identity(path, source_identities[path])
+        _publish_bundle(
+            [
+                (timing_part, timing_path),
+                (manifest_part, manifest_path),
+                # The video is the commit marker and is published last.
+                (muxed_part, output),
+            ],
+            args.overwrite,
+        )
+    return {
+        "video": output,
+        "timing": timing_path,
+        "manifest": manifest_path,
+        "frames": frame_count,
+        "transcoded": False,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Mux ROS CompressedVideo H.264 to MKV/MP4 without transcoding"
+    )
+    parser.add_argument("bags", nargs="+", help="bag paths or glob patterns")
+    parser.add_argument("--output", required=True, help="output .mkv or .mp4")
+    parser.add_argument(
+        "--video-topic",
+        default="/xgc/camera/world/video_h264",
+    )
+    parser.add_argument(
+        "--timing-topic",
+        default="/xgc/camera/world/frame_timing",
+    )
+    parser.add_argument("--stream-info-topic", default="")
+    parser.add_argument("--fps", type=float)
+    parser.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+    if not os.path.isfile(args.ffmpeg) or not os.access(args.ffmpeg, os.X_OK):
+        parser.error("ffmpeg executable is unavailable: " + args.ffmpeg)
+    try:
+        result = export(args)
+    except Exception as error:
+        parser.exit(1, "xgc_camera_bag_export: " + str(error) + "\n")
+    print(json.dumps(result, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

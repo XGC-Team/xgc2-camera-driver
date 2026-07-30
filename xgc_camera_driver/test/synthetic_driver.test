@@ -8,6 +8,7 @@
     <arg name="framerate" value="10.0" />
     <arg name="pixel_format" value="bgr24" />
     <arg name="output_encoding" value="bgr8" />
+    <arg name="camera_name" value="xgc2_synthetic_ci" />
   </include>
 
   <test test-name="synthetic_camera_contract"
