@@ -20,6 +20,7 @@ apt:
     - amd64
     - arm64
   depends:
+  - ffmpeg
   - libavcodec58
   - libavutil56
   - libopencv-core4.2
@@ -38,7 +39,7 @@ apt:
   - ros-noetic-rosbag
   - ros-noetic-rostopic
   - ros-noetic-sensor-msgs
-  - ros-noetic-xgc2-camera-msgs
+  - ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)
 usage:
   install: 'sudo apt update
 
@@ -68,8 +69,10 @@ ownership:
 release:
   requires:
   - libxgc2-camera-dev
+  - xgc2-ros-msgs
   dependency_policy:
     libxgc2-camera-dev: rebuild
+    xgc2-ros-msgs: rebuild
   repository: lxk36/xgc2-camera-ros1
   ref: main
   workflow: release.yml

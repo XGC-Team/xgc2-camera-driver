@@ -82,13 +82,19 @@ assert deb["size"] > 0
 PY
 
 grep -q '^id: xgc2-camera-ros1$' .xgc2/product.yml
-grep -q '^version: 0.3.0-7$' .xgc2/product.yml
-grep -q '^    focal: 0.3.0-7$' .xgc2/product.yml
+grep -q '^version: 0.3.0-8$' .xgc2/product.yml
+grep -q '^    focal: 0.3.0-8$' .xgc2/product.yml
 if grep -q '^    focal: .*~focal' .xgc2/product.yml; then
   echo "single-distribution ROS1 package version must not retain a focal suffix" >&2
   exit 1
 fi
 grep -q 'xgc2::camera' xgc_camera_driver/CMakeLists.txt
+grep -q 'ffmpeg, .*ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)' \
+  .xgc2/scripts/package_debs.sh
+grep -q 'libxgc2-camera-dev (>= 0.1.0-7~focal)' \
+  .xgc2/scripts/package_debs.sh
+grep -q 'ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp' \
+  .xgc2/scripts/package_debs.sh
 if grep -R -E 'xgc_camera_calibration|xgc2-camera-(intrinsic|extrinsic)|xgc2-camera-calibration-ros1.json' \
   .xgc2/scripts/build_debs_in_docker.sh .xgc2/scripts/package_debs.sh \
   .xgc2/scripts/check_installed_packages.sh >/dev/null; then
