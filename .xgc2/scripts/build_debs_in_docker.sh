@@ -47,8 +47,7 @@ docker run --rm \
       ros-noetic-rospack ros-noetic-rospy ros-noetic-rostest ros-noetic-rostopic \
       ros-noetic-sensor-msgs
     rm -rf /workspace/work/src /workspace/work/build /workspace/work/devel /workspace/work/install-root
-    mkdir -p \
-      /workspace/work/src/xgc_camera_driver \
+    mkdir -p /workspace/work/src/xgc_camera_driver
     rsync -a --delete /workspace/repo/xgc_camera_driver/ /workspace/work/src/xgc_camera_driver/
     cd /workspace/work
     source /opt/ros/noetic/setup.bash
