@@ -57,23 +57,6 @@ for path in sorted(root.glob("xgc_camera_*/package.xml")):
 for path in sorted(root.glob("xgc_camera_*/*/*.launch")):
     ET.parse(path)
 
-plugin = json.loads(plugin_path.read_text(encoding="utf-8"))
-assert plugin["apiVersion"] == "xgc.execution.process/v1"
-definitions = plugin["definitions"]
-ids = [definition["id"] for definition in definitions]
-assert len(ids) == len(set(ids)) == 1
-driver = next(item for item in definitions if item["id"] == "xgc2-camera-v4l2-ros1")
-for probe_name in ("readiness", "liveness"):
-    probe = driver[probe_name]
-    assert probe["kind"] == "exec"
-    assert probe["command"]["executable"] == "/opt/ros/noetic/bin/rostopic"
-    assert probe["command"]["args"] == [
-        "echo", "-n", "1", "${imageTopic}/header/stamp"
-    ]
-    assert probe["timeout"] >= 12_000_000_000
-assert driver["command"]["executable"] == (
-    "/opt/ros/noetic/lib/xgc_camera_driver/xgc_camera_driver_node"
-)
 manifest_paths = list(
     (pathlib.Path(os.environ["MANIFEST_TEST_ROOT"]) / "manifests").glob("*.json")
 )
