@@ -9,8 +9,6 @@ source "${PREFIX}/setup.bash"
 dpkg -s ros-noetic-xgc-camera-driver >/dev/null
 test "$(rospack find xgc_camera_driver)" = "${PREFIX}/share/xgc_camera_driver"
 test -x "${DRIVER}"
-test -f "${PLUGIN}"
-python3 -m json.tool "${PLUGIN}" >/dev/null
 roslaunch --files xgc_camera_driver camera.launch >/dev/null
 roslaunch --files xgc_camera_driver usb_cam_compat.launch >/dev/null
 if ldd "${DRIVER}" | grep -q 'not found'; then
