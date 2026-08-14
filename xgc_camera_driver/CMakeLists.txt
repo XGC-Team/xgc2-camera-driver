@@ -54,6 +54,7 @@ catkin_install_python(PROGRAMS
   scripts/xgc_camera_apply_alignment
   scripts/xgc_camera_alignment
   scripts/xgc_camera_bag_export
+  scripts/xgc_native_v4l2_rtp
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

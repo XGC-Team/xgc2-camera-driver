@@ -3,6 +3,26 @@
 The driver preserves a camera's native compressed stream instead of routing
 4K video through a raw-image decode/re-encode loop.
 
+## Media Edge (WebRTC)
+
+Live browser preview is **not** `ros_image_rtp_adapter` unless another
+process already owns the device. The native capture owner is:
+
+```bash
+rosrun xgc_camera_driver xgc_native_v4l2_rtp \
+  --device /dev/video0 --pixel-format mjpeg \
+  --source-id camera --rtp-port 5004 \
+  --control-socket /tmp/xgc2/media/camera.sock
+```
+
+or `roslaunch xgc_camera_driver native_v4l2_media.launch`. That process
+opens V4L2 once, encodes H264 once, and speaks the Media Edge control
+socket. Do not also start `xgc_camera_driver_node` on the same device.
+
+`ros_image_rtp_adapter` / any ROS-subscribe encoder is a last resort when
+native capture is already taken (for example `realsense2_camera` holds the
+USB device).
+
 ## Topic contract
 
 For a node launched below namespace `/usb_cam`:

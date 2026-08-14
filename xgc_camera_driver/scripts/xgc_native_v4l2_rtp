@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+# Native V4L2 capture owner -> one H264 encode -> Media Edge RTP + control.
+# Does not subscribe ROS images. ROS re-encode is a different tool.
+from __future__ import print_function
+
+import argparse
+import json
+import os
+import signal
+import socket
+import stat
+import subprocess
+import sys
+import threading
+import time
+
+
+PROTOCOL_VERSION = 1
+
+
+def _log(msg):
+    sys.stderr.write("xgc_native_v4l2_rtp: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def build_pipeline(args):
+    device = args.device
+    width = int(args.width)
+    height = int(args.height)
+    fps = int(round(float(args.fps)))
+    bitrate_kbps = max(1, int(args.bitrate) // 1000)
+    encoder = args.encoder
+    pixel = args.pixel_format.lower()
+
+    if encoder == "mpp":
+        enc = (
+            "mpph264enc bps=%d gop=30 header-mode=1 ! "
+            % (int(args.bitrate),)
+        )
+    elif encoder == "nvv4l2":
+        enc = (
+            "nvvidconv ! nvv4l2h264enc bitrate=%d iframeinterval=30 ! "
+            % (int(args.bitrate),)
+        )
+    else:
+        enc = (
+            "x264enc tune=zerolatency speed-preset=ultrafast "
+            "key-int-max=30 bitrate=%d byte-stream=true ! "
+            % bitrate_kbps
+        )
+
+    pay = (
+        "h264parse config-interval=1 ! "
+        "rtph264pay pt=96 config-interval=1 ! "
+        "udpsink host=%s port=%d sync=false async=false"
+        % (args.rtp_host, int(args.rtp_port))
+    )
+
+    if pixel in ("mjpeg", "jpeg"):
+        caps = (
+            "image/jpeg,width=%d,height=%d,framerate=%d/1 ! jpegdec ! videoconvert"
+            % (width, height, fps)
+        )
+    elif pixel in ("nv12",):
+        caps = (
+            "video/x-raw,format=NV12,width=%d,height=%d,framerate=%d/1 ! videoconvert"
+            % (width, height, fps)
+        )
+    elif pixel in ("yuyv", "yuy2"):
+        caps = (
+            "video/x-raw,format=YUY2,width=%d,height=%d,framerate=%d/1 ! videoconvert"
+            % (width, height, fps)
+        )
+    else:
+        caps = (
+            "video/x-raw,width=%d,height=%d,framerate=%d/1 ! videoconvert"
+            % (width, height, fps)
+        )
+
+    return (
+        "gst-launch-1.0 -q v4l2src device=%s do-timestamp=true ! %s ! %s %s"
+        % (device, caps, enc, pay)
+    )
+
+
+class ControlServer(object):
+    def __init__(self, path, description, on_set_active, on_keyframe, on_snapshot):
+        self._path = path
+        self._description = description
+        self._on_set_active = on_set_active
+        self._on_keyframe = on_keyframe
+        self._on_snapshot = on_snapshot
+        self._stop = threading.Event()
+        self._thread = None
+        self._server = None
+        self._active = False
+
+    def start(self):
+        if not os.path.isabs(self._path):
+            raise ValueError("control socket must be absolute")
+        parent = os.path.dirname(self._path)
+        if not os.path.isdir(parent):
+            os.makedirs(parent)
+        if os.path.exists(self._path):
+            os.unlink(self._path)
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        previous = os.umask(0o177)
+        try:
+            server.bind(self._path)
+        finally:
+            os.umask(previous)
+        os.chmod(self._path, stat.S_IRUSR | stat.S_IWUSR)
+        server.listen(8)
+        server.settimeout(0.5)
+        self._server = server
+        self._thread = threading.Thread(target=self._loop, name="v4l2-rtp-ctrl")
+        self._thread.daemon = True
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.5)
+        if self._server is not None:
+            try:
+                self._server.close()
+            except OSError:
+                pass
+        if os.path.exists(self._path):
+            try:
+                os.unlink(self._path)
+            except OSError:
+                pass
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                conn, _unused = self._server.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                if self._stop.is_set():
+                    break
+                continue
+            try:
+                self._handle(conn)
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+    def _handle(self, conn):
+        conn.settimeout(5.0)
+        buf = b""
+        while b"\n" not in buf:
+            chunk = conn.recv(65536)
+            if not chunk:
+                return
+            buf += chunk
+            if len(buf) > 1000000:
+                self._send(conn, {"ok": False, "error": "control request too large"})
+                return
+        line = buf.split(b"\n", 1)[0]
+        try:
+            request = json.loads(line.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            self._send(conn, {"ok": False, "error": "invalid json: %s" % exc})
+            return
+        op = str(request.get("operation") or "").strip()
+        if op == "describe":
+            self._send(conn, self._description)
+            return
+        if op == "set-active":
+            active = request.get("active")
+            if not isinstance(active, bool):
+                self._send(conn, {"ok": False, "error": "active must be a boolean"})
+                return
+            try:
+                self._on_set_active(active)
+            except Exception as exc:
+                self._send(conn, {"ok": False, "error": "set-active failed: %s" % exc})
+                return
+            self._active = active
+            self._send(conn, {"ok": True, "active": active})
+            return
+        if op == "request-keyframe":
+            try:
+                self._on_keyframe()
+            except Exception:
+                pass
+            self._send(conn, {"ok": True})
+            return
+        if op == "snapshot":
+            jpeg = b""
+            try:
+                jpeg = self._on_snapshot() or b""
+            except Exception:
+                jpeg = b""
+            header = {
+                "ok": True,
+                "snapshotId": str(request.get("snapshotId") or ""),
+                "jpegBytes": len(jpeg),
+                "rgbBytes": 0,
+                "width": self._description["width"],
+                "height": self._description["height"],
+                "frameId": self._description["frameId"],
+                "timestampClockDomain": "system_realtime",
+            }
+            conn.sendall(json.dumps(header, separators=(",", ":")).encode("utf-8") + b"\n" + jpeg)
+            return
+        self._send(conn, {"ok": False, "error": "unsupported operation: %s" % op})
+
+    @staticmethod
+    def _send(conn, payload):
+        conn.sendall(json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n")
+
+
+class NativeSource(object):
+    def __init__(self, args):
+        self.args = args
+        self._lock = threading.Lock()
+        self._proc = None
+        self._pipeline = build_pipeline(args)
+
+    def set_active(self, active):
+        with self._lock:
+            if active:
+                self._start_locked()
+            else:
+                self._stop_locked()
+
+    def keyframe(self):
+        with self._lock:
+            if self._proc is None:
+                return
+            self._stop_locked()
+            self._start_locked()
+
+    def snapshot(self):
+        # Same device cannot be opened twice. Snapshot is empty unless a
+        # future capture-side JPEG tee is added. Edge still gets a valid reply.
+        return b""
+
+    def _start_locked(self):
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        if not os.path.exists(self.args.device):
+            raise RuntimeError("video device missing: %s" % self.args.device)
+        _log("start %s" % self._pipeline)
+        self._proc = subprocess.Popen(
+            self._pipeline,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        time.sleep(0.3)
+        if self._proc.poll() is not None:
+            err = self._proc.stderr.read() if self._proc.stderr else b""
+            self._proc = None
+            raise RuntimeError("gstreamer exited: %s" % err.decode("utf-8", "replace")[:400])
+
+    def _stop_locked(self):
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
+
+    def close(self):
+        with self._lock:
+            self._stop_locked()
+
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(
+        description="Native V4L2 Media Edge source. Not a ROS re-encoder."
+    )
+    p.add_argument("--device", required=True)
+    p.add_argument("--width", type=int, default=640)
+    p.add_argument("--height", type=int, default=480)
+    p.add_argument("--fps", type=float, default=30.0)
+    p.add_argument("--pixel-format", default="nv12")
+    p.add_argument("--encoder", choices=("x264", "mpp", "nvv4l2"), default="x264")
+    p.add_argument("--bitrate", type=int, default=2500000)
+    p.add_argument("--source-id", default="camera")
+    p.add_argument("--frame-id", default="camera_optical_frame")
+    p.add_argument("--rtp-host", default="127.0.0.1")
+    p.add_argument("--rtp-port", type=int, default=5004)
+    p.add_argument("--control-socket", default="/tmp/xgc2/media/camera.sock")
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    if not os.path.exists(args.device):
+        _log("device not found: %s" % args.device)
+        return 1
+    source = NativeSource(args)
+    description = {
+        "ok": True,
+        "protocolVersion": PROTOCOL_VERSION,
+        "sourceId": args.source_id,
+        "codec": "H264",
+        "rtpPayloadType": 96,
+        "rtpClockRate": 90000,
+        "rtpHost": args.rtp_host,
+        "rtpPort": int(args.rtp_port),
+        "width": int(args.width),
+        "height": int(args.height),
+        "fps": float(args.fps),
+        "frameId": args.frame_id,
+        "capabilities": ["set-active", "request-keyframe", "snapshot"],
+        "timestampClockDomain": "system_realtime",
+    }
+    server = ControlServer(
+        args.control_socket,
+        description,
+        source.set_active,
+        source.keyframe,
+        source.snapshot,
+    )
+    stop = {"flag": False}
+
+    def _die(_signum, _frame):
+        stop["flag"] = True
+
+    signal.signal(signal.SIGINT, _die)
+    signal.signal(signal.SIGTERM, _die)
+    server.start()
+    _log(
+        "ready device=%s encoder=%s rtp=%s:%d sock=%s"
+        % (args.device, args.encoder, args.rtp_host, args.rtp_port, args.control_socket)
+    )
+    try:
+        while not stop["flag"]:
+            time.sleep(0.2)
+    finally:
+        source.close()
+        server.stop()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

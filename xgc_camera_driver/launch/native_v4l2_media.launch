@@ -1,0 +1,19 @@
+<launch>
+  <!-- Native V4L2 capture owner -> Media Edge. Does not subscribe ROS images. -->
+  <arg name="device" default="/dev/video0" />
+  <arg name="width" default="640" />
+  <arg name="height" default="480" />
+  <arg name="fps" default="30" />
+  <arg name="pixel_format" default="mjpeg" />
+  <arg name="encoder" default="x264" />
+  <arg name="bitrate" default="2500000" />
+  <arg name="source_id" default="camera" />
+  <arg name="frame_id" default="usb_cam_optical_frame" />
+  <arg name="rtp_host" default="127.0.0.1" />
+  <arg name="rtp_port" default="5004" />
+  <arg name="control_socket" default="/tmp/xgc2/media/camera.sock" />
+
+  <node pkg="xgc_camera_driver" type="xgc_native_v4l2_rtp" name="xgc_native_v4l2_rtp"
+        output="screen"
+        args="--device $(arg device) --width $(arg width) --height $(arg height) --fps $(arg fps) --pixel-format $(arg pixel_format) --encoder $(arg encoder) --bitrate $(arg bitrate) --source-id $(arg source_id) --frame-id $(arg frame_id) --rtp-host $(arg rtp_host) --rtp-port $(arg rtp_port) --control-socket $(arg control_socket)" />
+</launch>
