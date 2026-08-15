@@ -4,11 +4,11 @@ Child of the [`xgc2-camera`](https://github.com/XGC-Team/xgc2-camera) product.
 USB / V4L2 / FS150 live in this repository. D435 / D435i live in the nested
 [`d435/`](https://github.com/XGC-Team/xgc2-camera-d435) child.
 
-| Camera | Path | Launch |
-| --- | --- | --- |
-| Lab USB | this repo `xgc_camera_driver` | `usb_cam_compat.launch` (`/dev/video0`) |
-| FS150 board camera | this repo `xgc_native_v4l2_rtp` | `native_v4l2_media.launch` (`/dev/video8`, NV12) |
-| D435 / D435i (Scout, lab) | `d435/` (`xgc_camera_d435`) | `roslaunch xgc_camera_d435 d435.launch` |
+| Camera | Path | What lives there | Launch |
+| --- | --- | --- | --- |
+| Lab USB | this repo `xgc_camera_driver` | first-party V4L2 ROS driver | `usb_cam_compat.launch` (`/dev/video0`) |
+| FS150 board camera | this repo `xgc_native_v4l2_rtp` | first-party V4L2 RTP | `native_v4l2_media.launch` (`/dev/video8`, NV12) |
+| D435 / D435i | `d435/` (`xgc2-camera-d435`) | Intel `realsense2_camera` + URDF + XGC2 defaults | `roslaunch xgc_camera_d435 d435.launch` |
 
 This product turns one fixed or general-purpose Linux camera into a supervised
 ROS Noetic process. It is strictly the ROS interface adapter in the camera
