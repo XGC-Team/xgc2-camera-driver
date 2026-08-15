@@ -19,7 +19,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate product contracts
         run: .xgc2/scripts/check_package_compliance.sh
-
   build-debs:
     strategy:
       fail-fast: false
@@ -52,3 +51,5 @@ jobs:
             .ci/build-manifests/*.json
           include-hidden-files: true
           retention-days: 14
+
+
