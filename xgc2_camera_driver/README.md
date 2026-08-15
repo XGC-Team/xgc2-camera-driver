@@ -19,9 +19,10 @@ or `roslaunch xgc2_camera_driver native_v4l2_media.launch`. That process
 opens V4L2 once, encodes H264 once, and speaks the Media Edge control
 socket. Do not also start `xgc2_camera_driver_node` on the same device.
 
-`ros_image_rtp_adapter` / any ROS-subscribe encoder is a last resort when
-native capture is already taken (for example `realsense2_camera` holds the
-USB device).
+`xgc_ros_image_rtp` / `ros_image_rtp.launch` is the last-resort ROS Image
+to H264/RTP encoder when native capture is already taken (for example
+`realsense2_camera` holds the USB device). Vehicles only pass topic, size,
+and RTP port.
 
 ## Topic contract
 

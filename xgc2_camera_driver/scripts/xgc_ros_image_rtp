@@ -1,0 +1,340 @@
+#!/usr/bin/env python
+# ROS Image subscribe -> H264/RTP + Media Edge control socket.
+# Does not open the camera. Use only when another process already owns the device.
+from __future__ import print_function
+
+import json
+import os
+import socket
+import subprocess
+import threading
+import time
+
+import rospy
+from sensor_msgs.msg import Image
+
+try:
+    import numpy as np
+    import cv2
+    _HAVE_CV = True
+except ImportError:
+    np = None
+    cv2 = None
+    _HAVE_CV = False
+
+
+def _ord_byte(value):
+    # Python 2 Image.data is str; a one-char slice is still str.
+    if isinstance(value, int):
+        return value
+    return ord(value)
+
+
+def _depth_to_rgb(data, width, height, step):
+    """16-bit millimeters to grayscale RGB for H264. Near=dark, far=bright, 0=black."""
+    if _HAVE_CV:
+        cols = step // 2
+        depth = np.frombuffer(bytearray(data), dtype=np.uint16)
+        if depth.size < height * cols:
+            return None
+        depth = depth.reshape((height, cols))[:, :width]
+        valid = depth != 0
+        clipped = np.clip(depth, 200, 8000)
+        gray = ((clipped - 200) * (255.0 / 7800.0)).astype(np.uint8)
+        gray = np.where(valid, gray, 0)
+        return np.repeat(gray[:, :, None], 3, axis=2).tobytes()
+
+    out = bytearray(width * height * 3)
+    o = 0
+    for y in range(height):
+        row = y * step
+        for x in range(width):
+            z = _ord_byte(data[row + 2 * x]) | (_ord_byte(data[row + 2 * x + 1]) << 8)
+            if z == 0:
+                n = 0
+            else:
+                t = z
+                if t < 200:
+                    t = 200
+                if t > 8000:
+                    t = 8000
+                n = int((t - 200) * 255 / 7800)
+            out[o] = out[o + 1] = out[o + 2] = n
+            o += 3
+    return bytes(out)
+
+
+class ControlServer(object):
+    def __init__(self, path, description, on_keyframe):
+        self.path = path
+        self.description = description
+        self.on_keyframe = on_keyframe
+        self.active = False
+        self._stop = threading.Event()
+        self._srv = None
+        self._thread = None
+
+    def start(self):
+        parent = os.path.dirname(self.path)
+        if parent:
+            try:
+                os.makedirs(parent)
+            except OSError:
+                pass
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(self.path)
+        os.chmod(self.path, 0o666)
+        srv.listen(8)
+        srv.settimeout(0.5)
+        self._srv = srv
+        self._thread = threading.Thread(target=self._loop)
+        self._thread.daemon = True
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(2.0)
+        if self._srv is not None:
+            try:
+                self._srv.close()
+            except OSError:
+                pass
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            try:
+                self._handle(conn)
+            finally:
+                conn.close()
+
+    def _handle(self, conn):
+        conn.settimeout(5.0)
+        buf = b""
+        while b"\n" not in buf:
+            chunk = conn.recv(65536)
+            if not chunk:
+                return
+            buf += chunk
+        line = buf.split(b"\n", 1)[0]
+        try:
+            req = json.loads(line.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            conn.sendall(json.dumps({"ok": False, "error": str(exc)}) + "\n")
+            return
+        op = str(req.get("operation", "")).strip()
+        if op == "describe":
+            conn.sendall(json.dumps(self.description) + "\n")
+            return
+        if op == "set-active":
+            self.active = bool(req.get("active"))
+            conn.sendall(json.dumps({"ok": True, "active": self.active}) + "\n")
+            return
+        if op == "request-keyframe":
+            if self.on_keyframe:
+                self.on_keyframe()
+            conn.sendall(json.dumps({"ok": True}) + "\n")
+            return
+        if op == "snapshot":
+            header = {
+                "ok": True,
+                "jpegBytes": 0,
+                "rgbBytes": 0,
+                "width": self.description["width"],
+                "height": self.description["height"],
+                "frameId": self.description["frameId"],
+            }
+            conn.sendall(json.dumps(header) + "\n")
+            return
+        conn.sendall(json.dumps({"ok": False, "error": "unsupported"}) + "\n")
+
+
+class FallbackEncoder(object):
+    def __init__(self):
+        self.topic = rospy.get_param("~image_topic", "/camera/color/image_raw")
+        self.source_id = rospy.get_param("~source_id", "color")
+        self.frame_id = rospy.get_param("~frame_id", "camera_color_optical_frame")
+        self.width = int(rospy.get_param("~width", 640))
+        self.height = int(rospy.get_param("~height", 480))
+        self.fps = float(rospy.get_param("~fps", 30.0))
+        self.rtp_host = rospy.get_param("~rtp_host", "127.0.0.1")
+        self.rtp_port = int(rospy.get_param("~rtp_port", 5004))
+        self.socket_path = rospy.get_param(
+            "~control_socket", "/tmp/xgc2/media/color.sock"
+        )
+        self.bitrate = int(rospy.get_param("~bitrate", 2500000))
+        self.encoder = rospy.get_param("~h264_encoder", "omxh264enc")
+        self.proc = None
+        self.lock = threading.Lock()
+        self._sent = 0
+        self._dropped = 0
+        self._last_stat = time.time()
+        desc = {
+            "ok": True,
+            "protocolVersion": 1,
+            "sourceId": self.source_id,
+            "codec": "H264",
+            "rtpPayloadType": 96,
+            "rtpClockRate": 90000,
+            "rtpHost": self.rtp_host,
+            "rtpPort": self.rtp_port,
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "frameId": self.frame_id,
+            "capabilities": ["set-active", "request-keyframe", "snapshot"],
+            "timestampClockDomain": "system_realtime",
+        }
+        self.control = ControlServer(self.socket_path, desc, self._force_keyframe)
+        self.control.start()
+        self._start_gst()
+        rospy.Subscriber(self.topic, Image, self._on_image, queue_size=1, buff_size=8 * 1024 * 1024)
+        rospy.loginfo(
+            "xgc_ros_image_rtp topic=%s rtp=%s:%d sock=%s encoder=%s cv=%s",
+            self.topic,
+            self.rtp_host,
+            self.rtp_port,
+            self.socket_path,
+            self.encoder,
+            _HAVE_CV,
+        )
+
+    def _start_gst(self):
+        pipeline = [
+            "gst-launch-1.0",
+            "-q",
+            "fdsrc",
+            "fd=0",
+            "!",
+            "videoparse",
+            "format=rgb",
+            "width=%d" % self.width,
+            "height=%d" % self.height,
+            "framerate=%d/1" % int(self.fps),
+            "!",
+            "videoconvert",
+            "!",
+            "nvvidconv",
+            "!",
+            "video/x-raw(memory:NVMM),format=NV12",
+            "!",
+            self.encoder,
+            "!",
+            "h264parse",
+            "config-interval=1",
+            "!",
+            "rtph264pay",
+            "pt=96",
+            "config-interval=1",
+            "mtu=1200",
+            "!",
+            "udpsink",
+            "host=%s" % self.rtp_host,
+            "port=%d" % self.rtp_port,
+            "sync=false",
+            "async=false",
+        ]
+        rospy.loginfo("gst: %s", " ".join(pipeline))
+        self.proc = subprocess.Popen(pipeline, stdin=subprocess.PIPE)
+
+    def _force_keyframe(self):
+        pass
+
+    def _on_image(self, msg):
+        if not self.control.active:
+            return
+        if msg.width != self.width or msg.height != self.height:
+            rospy.logwarn_throttle(
+                5.0, "skip frame %dx%d want %dx%d", msg.width, msg.height, self.width, self.height
+            )
+            return
+        data = msg.data
+        expect = self.width * self.height * 3
+        if msg.encoding in ("16UC1", "mono16"):
+            data = _depth_to_rgb(data, self.width, self.height, msg.step)
+            if data is None:
+                self._dropped += 1
+                rospy.logwarn_throttle(5.0, "depth colorize failed %dx%d step=%d", msg.width, msg.height, msg.step)
+                return
+        elif msg.encoding == "bgr8":
+            if _HAVE_CV:
+                img = np.frombuffer(bytearray(data), dtype=np.uint8)
+                cols = msg.step
+                if img.size < self.height * cols:
+                    return
+                img = img.reshape((self.height, cols))[:, : self.width * 3]
+                data = img.reshape((self.height, self.width, 3))[:, :, ::-1].tobytes()
+            else:
+                raw = bytearray(data[:expect])
+                for i in range(0, expect, 3):
+                    raw[i], raw[i + 2] = raw[i + 2], raw[i]
+                data = bytes(raw)
+        elif msg.encoding == "rgb8":
+            data = data[:expect]
+        elif msg.encoding == "mono8":
+            if _HAVE_CV:
+                gray = np.frombuffer(bytearray(data), dtype=np.uint8)
+                if gray.size < self.height * msg.step:
+                    return
+                gray = gray.reshape((self.height, msg.step))[:, : self.width]
+                data = np.repeat(gray[:, :, None], 3, axis=2).tobytes()
+            else:
+                gray = data[: self.width * self.height]
+                data = bytearray(expect)
+                for i, g in enumerate(gray):
+                    data[i * 3] = data[i * 3 + 1] = data[i * 3 + 2] = g
+                data = bytes(data)
+        else:
+            rospy.logwarn_throttle(5.0, "unsupported encoding %s", msg.encoding)
+            return
+        try:
+            self.proc.stdin.write(data)
+            self.proc.stdin.flush()
+            self._sent += 1
+        except Exception as exc:
+            self._dropped += 1
+            rospy.logerr_throttle(2.0, "gst stdin: %s", exc)
+        now = time.time()
+        if now - self._last_stat >= 5.0:
+            rospy.loginfo(
+                "rtp %s sent=%d dropped=%d active=%s",
+                self.source_id,
+                self._sent,
+                self._dropped,
+                self.control.active,
+            )
+            self._last_stat = now
+
+    def stop(self):
+        self.control.stop()
+        if self.proc is not None:
+            try:
+                self.proc.stdin.close()
+            except Exception:
+                pass
+            self.proc.terminate()
+
+
+def main():
+    rospy.init_node("xgc_ros_image_rtp", anonymous=True)
+    node = FallbackEncoder()
+    rospy.on_shutdown(node.stop)
+    rospy.spin()
+
+
+if __name__ == "__main__":
+    main()
