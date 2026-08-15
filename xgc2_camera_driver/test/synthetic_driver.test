@@ -1,5 +1,5 @@
 <launch>
-  <include file="$(find xgc_camera_driver)/launch/camera.launch">
+  <include file="$(find xgc2_camera_driver)/launch/camera.launch">
     <arg name="camera_ns" value="test_camera" />
     <arg name="backend" value="synthetic" />
     <arg name="video_device" value="synthetic:0" />
@@ -12,7 +12,7 @@
   </include>
 
   <test test-name="synthetic_camera_contract"
-        pkg="xgc_camera_driver"
+        pkg="xgc2_camera_driver"
         type="test_synthetic_driver.py"
         time-limit="20" />
 </launch>

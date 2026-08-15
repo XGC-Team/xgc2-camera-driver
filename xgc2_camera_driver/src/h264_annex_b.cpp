@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace xgc_camera_driver {
+namespace xgc2_camera_driver {
 namespace h264 {
 namespace {
 
@@ -144,4 +144,4 @@ bool AccessUnitGate::prepare(
 }
 
 }  // namespace h264
-}  // namespace xgc_camera_driver
+}  // namespace xgc2_camera_driver

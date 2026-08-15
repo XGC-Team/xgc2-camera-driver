@@ -48,8 +48,8 @@ docker run --rm \
       ros-noetic-rospack ros-noetic-rospy ros-noetic-rostest ros-noetic-rostopic \
       ros-noetic-sensor-msgs ros-noetic-xgc2-camera-msgs
     rm -rf /workspace/work/src /workspace/work/build /workspace/work/devel /workspace/work/install-root
-    mkdir -p /workspace/work/src/xgc_camera_driver
-    rsync -a --delete /workspace/repo/xgc_camera_driver/ /workspace/work/src/xgc_camera_driver/
+    mkdir -p /workspace/work/src/xgc2_camera_driver
+    rsync -a --delete /workspace/repo/xgc2_camera_driver/ /workspace/work/src/xgc2_camera_driver/
     cd /workspace/work
     source /opt/ros/noetic/setup.bash
     catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -58,7 +58,7 @@ docker run --rm \
     DESTDIR=/workspace/work/install-root catkin_make install -DCMAKE_INSTALL_PREFIX=/opt/ros/noetic -DCATKIN_ENABLE_TESTING=OFF
     /workspace/repo/.xgc2/scripts/package_debs.sh --install-root /workspace/work/install-root --output-dir /workspace/out
     if [[ "${INSTALL_CHECK}" == true ]]; then
-      apt-get install -y /workspace/out/ros-noetic-xgc-camera-driver_*.deb
+      apt-get install -y /workspace/out/ros-noetic-xgc2-camera-driver_*.deb
       /workspace/repo/.xgc2/scripts/check_installed_packages.sh
     fi
   '

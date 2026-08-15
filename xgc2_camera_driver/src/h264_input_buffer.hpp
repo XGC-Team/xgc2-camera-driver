@@ -12,7 +12,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 }
 
-namespace xgc_camera_driver {
+namespace xgc2_camera_driver {
 namespace detail {
 
 inline int checkedCompressedPayloadSize(const std::size_t size,
@@ -53,4 +53,4 @@ private:
 };
 
 }  // namespace detail
-}  // namespace xgc_camera_driver
+}  // namespace xgc2_camera_driver

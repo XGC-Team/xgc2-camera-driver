@@ -5,7 +5,7 @@
 #include <limits>
 
 namespace camera = xgc2::camera;
-namespace timing = xgc_camera_driver::timing;
+namespace timing = xgc2_camera_driver::timing;
 
 TEST(ClockMapper, MapsMonotonicUsingMeasuredClockPair)
 {

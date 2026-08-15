@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROS_DISTRO="${ROS_DISTRO:-noetic}"
 PREFIX="/opt/ros/${ROS_DISTRO}"
-DRIVER="${PREFIX}/lib/xgc_camera_driver/xgc_camera_driver_node"
+DRIVER="${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node"
 
 source "${PREFIX}/setup.bash"
-dpkg -s ros-noetic-xgc-camera-driver >/dev/null
-test "$(rospack find xgc_camera_driver)" = "${PREFIX}/share/xgc_camera_driver"
+dpkg -s ros-noetic-xgc2-camera-driver >/dev/null
+test "$(rospack find xgc2_camera_driver)" = "${PREFIX}/share/xgc2_camera_driver"
 test -x "${DRIVER}"
-roslaunch --files xgc_camera_driver camera.launch >/dev/null
-roslaunch --files xgc_camera_driver usb_cam_compat.launch >/dev/null
+roslaunch --files xgc2_camera_driver camera.launch >/dev/null
+roslaunch --files xgc2_camera_driver usb_cam_compat.launch >/dev/null
 if ldd "${DRIVER}" | grep -q 'not found'; then
   ldd "${DRIVER}" >&2
   exit 1

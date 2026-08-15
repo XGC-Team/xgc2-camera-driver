@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(xgc_camera_driver VERSION 0.1.0 LANGUAGES CXX)
+project(xgc2_camera_driver VERSION 0.1.0 LANGUAGES CXX)
 
 find_package(catkin REQUIRED COMPONENTS
   camera_info_manager
@@ -23,15 +23,15 @@ catkin_package(
   DEPENDS OpenCV
 )
 
-add_executable(xgc_camera_driver_node
+add_executable(xgc2_camera_driver_node
   src/camera_driver_node.cpp
   src/clock_mapper.cpp
   src/h264_annex_b.cpp
 )
-add_dependencies(xgc_camera_driver_node ${catkin_EXPORTED_TARGETS})
-target_compile_features(xgc_camera_driver_node PRIVATE cxx_std_14)
-target_compile_options(xgc_camera_driver_node PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(xgc_camera_driver_node
+add_dependencies(xgc2_camera_driver_node ${catkin_EXPORTED_TARGETS})
+target_compile_features(xgc2_camera_driver_node PRIVATE cxx_std_14)
+target_compile_options(xgc2_camera_driver_node PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(xgc2_camera_driver_node
   PRIVATE
     ${catkin_LIBRARIES}
     ${OpenCV_LIBRARIES}
@@ -39,9 +39,9 @@ target_link_libraries(xgc_camera_driver_node
     Threads::Threads
     xgc2::camera
 )
-target_include_directories(xgc_camera_driver_node PRIVATE ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
+target_include_directories(xgc2_camera_driver_node PRIVATE ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
-install(TARGETS xgc_camera_driver_node
+install(TARGETS xgc2_camera_driver_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(DIRECTORY launch config

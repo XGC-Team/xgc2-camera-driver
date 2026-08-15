@@ -5,7 +5,7 @@
 
 #include <xgc2/camera/camera.hpp>
 
-namespace xgc_camera_driver {
+namespace xgc2_camera_driver {
 namespace timing {
 
 enum class UnknownClockPolicy {
@@ -42,4 +42,4 @@ UnknownClockPolicy unknownClockPolicyFromString(const std::string& value);
 const char* toString(UnknownClockPolicy value) noexcept;
 
 }  // namespace timing
-}  // namespace xgc_camera_driver
+}  // namespace xgc2_camera_driver

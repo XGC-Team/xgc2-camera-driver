@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace xgc_camera_driver {
+namespace xgc2_camera_driver {
 namespace h264 {
 
 struct AccessUnitInfo {
@@ -41,4 +41,4 @@ class AccessUnitGate {
 };
 
 }  // namespace h264
-}  // namespace xgc_camera_driver
+}  // namespace xgc2_camera_driver

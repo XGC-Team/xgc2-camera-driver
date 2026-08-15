@@ -73,18 +73,18 @@ EOF
 }
 
 build_driver() {
-  local package_name="ros-noetic-xgc-camera-driver"
+  local package_name="ros-noetic-xgc2-camera-driver"
   local package_root="${BUILD_ROOT}/${package_name}"
   mkdir -p "${package_root}"
-  copy_ros_package xgc_camera_driver "${package_root}"
+  copy_ros_package xgc2_camera_driver "${package_root}"
   write_control "${package_root}" "${package_name}" \
     "ffmpeg, libavcodec58, libavutil56, libopencv-core4.2, libopencv-imgcodecs4.2, libopencv-imgproc4.2, libswscale5, libxgc2-camera-dev (>= 0.1.0-7~focal), ros-noetic-camera-info-manager, ros-noetic-cv-bridge, ros-noetic-diagnostic-msgs, ros-noetic-diagnostic-updater, ros-noetic-foxglove-msgs, ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp, ros-noetic-roslaunch, ros-noetic-rostopic, ros-noetic-sensor-msgs, ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)" \
     "XGC2 ROS Noetic adapter for the independent Linux camera core"
-  test -x "${package_root}${PREFIX}/lib/xgc_camera_driver/xgc_camera_driver_node"
+  test -x "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node"
   find "${package_root}" -type d -exec chmod 0755 {} +
   find "${package_root}" -type f -exec chmod 0644 {} +
-  chmod 0755 "${package_root}${PREFIX}/lib/xgc_camera_driver/xgc_camera_driver_node"
-  strip --strip-unneeded "${package_root}${PREFIX}/lib/xgc_camera_driver/xgc_camera_driver_node" 2>/dev/null || true
+  chmod 0755 "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node"
+  strip --strip-unneeded "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node" 2>/dev/null || true
   fakeroot dpkg-deb --build "${package_root}" "${OUTPUT_DIR}/${package_name}_${VERSION}_${ARCH}.deb" >/dev/null
 }
 

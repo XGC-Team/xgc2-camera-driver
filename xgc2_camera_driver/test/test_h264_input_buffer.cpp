@@ -7,7 +7,7 @@
 
 #include <gtest/gtest.h>
 
-namespace detail = xgc_camera_driver::detail;
+namespace detail = xgc2_camera_driver::detail;
 
 TEST(H264InputBuffer, CopiesPayloadAndProvidesZeroParserPadding)
 {

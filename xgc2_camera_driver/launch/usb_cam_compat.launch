@@ -13,7 +13,7 @@
   <arg name="capture_timeout_ms" default="2000" />
   <arg name="synthetic_seed" default="1" />
 
-  <include file="$(find xgc_camera_driver)/launch/camera.launch">
+  <include file="$(find xgc2_camera_driver)/launch/camera.launch">
     <arg name="camera_ns" value="usb_cam" />
     <arg name="backend" value="$(arg backend)" />
     <arg name="video_device" value="$(arg video_device)" />

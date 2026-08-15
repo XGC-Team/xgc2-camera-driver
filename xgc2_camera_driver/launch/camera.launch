@@ -1,7 +1,7 @@
 <launch>
   <arg name="camera_ns" default="usb_cam" />
   <arg name="node_name" default="driver" />
-  <arg name="config_file" default="$(find xgc_camera_driver)/config/usb_cam.yaml" />
+  <arg name="config_file" default="$(find xgc2_camera_driver)/config/usb_cam.yaml" />
   <arg name="backend" default="v4l2" />
   <arg name="video_device" default="/dev/video0" />
   <arg name="width" default="1920" />
@@ -24,8 +24,8 @@
   <arg name="respawn" default="false" />
 
   <group ns="$(arg camera_ns)">
-    <node pkg="xgc_camera_driver"
-          type="xgc_camera_driver_node"
+    <node pkg="xgc2_camera_driver"
+          type="xgc2_camera_driver_node"
           name="$(arg node_name)"
           output="screen"
           respawn="$(arg respawn)">

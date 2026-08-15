@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace h264 = xgc_camera_driver::h264;
+namespace h264 = xgc2_camera_driver::h264;
 
 namespace {
 

@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <time.h>
 
-namespace xgc_camera_driver {
+namespace xgc2_camera_driver {
 namespace timing {
 namespace {
 
@@ -176,4 +176,4 @@ const char* toString(UnknownClockPolicy value) noexcept {
 }
 
 }  // namespace timing
-}  // namespace xgc_camera_driver
+}  // namespace xgc2_camera_driver

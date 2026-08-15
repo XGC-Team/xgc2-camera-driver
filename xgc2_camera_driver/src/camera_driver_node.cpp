@@ -51,7 +51,7 @@ using xgc2::camera::Frame;
 using xgc2::camera::PixelFormat;
 using xgc2::camera::Timestamp;
 using xgc2::camera::TimestampReference;
-using xgc_camera_driver::timing::Mapping;
+using xgc2_camera_driver::timing::Mapping;
 
 constexpr std::uint64_t kNanosecondsPerSecond = 1000000000ULL;
 
@@ -87,7 +87,7 @@ std::uint64_t nextEpoch(const std::uint64_t value)
 
 std::uint64_t initialEpoch()
 {
-  const auto clocks = xgc_camera_driver::timing::sampleHostClocks();
+  const auto clocks = xgc2_camera_driver::timing::sampleHostClocks();
   std::uint64_t value = static_cast<std::uint64_t>(
       clocks.valid ? clocks.realtime_ns : 1);
   value ^= static_cast<std::uint64_t>(::getpid()) << 32U;
@@ -213,7 +213,7 @@ cv::Mat decodeToBgr(const Frame& frame)
         throw std::runtime_error("empty MJPEG frame");
       }
       const int encoded_size =
-          xgc_camera_driver::detail::checkedCompressedPayloadSize(
+          xgc2_camera_driver::detail::checkedCompressedPayloadSize(
               frame.size(), "MJPEG");
       const cv::Mat encoded(
           1,
@@ -337,7 +337,7 @@ class H264StreamDecoder {
       metadata_.erase(metadata_.begin());
     }
 
-    const xgc_camera_driver::detail::PaddedH264Input padded_input(
+    const xgc2_camera_driver::detail::PaddedH264Input padded_input(
         input_frame.data(), input_frame.size());
     const std::uint8_t* input = padded_input.data();
     int remaining = padded_input.payloadSize();
@@ -655,7 +655,7 @@ class CameraDriverNode {
                                         << " encoded_queue="
                                         << encoded_queue_capacity_
                                         << " unknown_clock="
-                                        << xgc_camera_driver::timing::toString(
+                                        << xgc2_camera_driver::timing::toString(
                                                unknown_clock_policy_));
 
     while (ros::ok()) {
@@ -750,7 +750,7 @@ class CameraDriverNode {
     (void)convertOutput(cv::Mat(1, 1, CV_8UC3), output_encoding_);
     raw_publish_mode_ = rawPublishModeFromString(raw_publish_mode);
     unknown_clock_policy_ =
-        xgc_camera_driver::timing::unknownClockPolicyFromString(
+        xgc2_camera_driver::timing::unknownClockPolicyFromString(
             unknown_timestamp_clock);
   }
 
@@ -763,10 +763,10 @@ class CameraDriverNode {
 
   Mapping mapTimestamp(const Timestamp& source) const
   {
-    return xgc_camera_driver::timing::mapSourceTimestamp(
+    return xgc2_camera_driver::timing::mapSourceTimestamp(
         source,
         unknown_clock_policy_,
-        xgc_camera_driver::timing::sampleHostClocks());
+        xgc2_camera_driver::timing::sampleHostClocks());
   }
 
   void handleFrame(const Frame& frame)
@@ -779,7 +779,7 @@ class CameraDriverNode {
                       "(clock=") +
           xgc2::camera::to_string(frame.timestamp().clock) +
           ", policy=" +
-          xgc_camera_driver::timing::toString(unknown_clock_policy_) + ")");
+          xgc2_camera_driver::timing::toString(unknown_clock_policy_) + ")");
       return;
     }
     clearError();
@@ -914,7 +914,7 @@ class CameraDriverNode {
       if (continuity_reset || queue_dropped > 0U) {
         h264_gate_.discontinuity();
       }
-      xgc_camera_driver::h264::AccessUnitInfo info;
+      xgc2_camera_driver::h264::AccessUnitInfo info;
       if (!h264_gate_.prepare(
               frame.data(), frame.size(), &packet.data, &info)) {
         if (!info.annex_b) {
@@ -1176,7 +1176,7 @@ class CameraDriverNode {
     timing.host_dequeue_monotonic_ns =
         packet.dequeue_monotonic_ns;
     const auto publish_clocks =
-        xgc_camera_driver::timing::sampleHostClocks();
+        xgc2_camera_driver::timing::sampleHostClocks();
     timing.host_publish_realtime_ns =
         publish_clocks.valid ? publish_clocks.realtime_ns : 0;
     timing.source_to_ros_offset_ns =
@@ -1261,7 +1261,7 @@ class CameraDriverNode {
     status.add("raw_publish_mode", toString(raw_publish_mode_));
     status.add(
         "unknown_timestamp_clock",
-        xgc_camera_driver::timing::toString(
+        xgc2_camera_driver::timing::toString(
             unknown_clock_policy_));
     status.add("frame_id", frame_id_);
     status.add("stream_id", stream_id_);
@@ -1319,7 +1319,7 @@ class CameraDriverNode {
   diagnostic_updater::Updater updater_;
   std::unique_ptr<xgc2::camera::Camera> camera_;
   ImageDecoder decoder_;
-  xgc_camera_driver::h264::AccessUnitGate h264_gate_;
+  xgc2_camera_driver::h264::AccessUnitGate h264_gate_;
 
   std::string backend_;
   std::string video_device_;
@@ -1332,9 +1332,9 @@ class CameraDriverNode {
   std::string camera_info_url_;
   PixelFormat native_pixel_format_{PixelFormat::Unknown};
   RawPublishMode raw_publish_mode_{RawPublishMode::OnDemand};
-  xgc_camera_driver::timing::UnknownClockPolicy
+  xgc2_camera_driver::timing::UnknownClockPolicy
       unknown_clock_policy_{
-          xgc_camera_driver::timing::UnknownClockPolicy::Reject};
+          xgc2_camera_driver::timing::UnknownClockPolicy::Reject};
   std::uint32_t width_{640};
   std::uint32_t height_{480};
   std::uint32_t buffer_count_{4};
@@ -1389,7 +1389,7 @@ class CameraDriverNode {
 
 int main(int argc, char** argv)
 {
-  ros::init(argc, argv, "xgc_camera_driver");
+  ros::init(argc, argv, "xgc2_camera_driver");
   ros::AsyncSpinner spinner(1);
   spinner.start();
   try {

@@ -9,15 +9,15 @@ Live browser preview is **not** `ros_image_rtp_adapter` unless another
 process already owns the device. The native capture owner is:
 
 ```bash
-rosrun xgc_camera_driver xgc_native_v4l2_rtp \
+rosrun xgc2_camera_driver xgc_native_v4l2_rtp \
   --device /dev/video0 --pixel-format mjpeg \
   --source-id camera --rtp-port 5004 \
   --control-socket /tmp/xgc2/media/camera.sock
 ```
 
-or `roslaunch xgc_camera_driver native_v4l2_media.launch`. That process
+or `roslaunch xgc2_camera_driver native_v4l2_media.launch`. That process
 opens V4L2 once, encodes H264 once, and speaks the Media Edge control
-socket. Do not also start `xgc_camera_driver_node` on the same device.
+socket. Do not also start `xgc2_camera_driver_node` on the same device.
 
 `ros_image_rtp_adapter` / any ROS-subscribe encoder is a last resort when
 native capture is already taken (for example `realsense2_camera` holds the
@@ -79,7 +79,7 @@ H.264 mode, create a small, playable derivative without decoding or
 re-encoding:
 
 ```bash
-rosrun xgc_camera_driver xgc_camera_bag_export \
+rosrun xgc2_camera_driver xgc_camera_bag_export \
   /data/session/xgc*.bag \
   --video-topic /usb_cam/video \
   --timing-topic /usb_cam/frame_timing \
@@ -109,7 +109,7 @@ Record a measured stable 120 ms physical-camera delay as a separate,
 versioned artifact (the bags are never rewritten):
 
 ```bash
-rosrun xgc_camera_driver xgc_camera_alignment \
+rosrun xgc2_camera_driver xgc_camera_alignment \
   /data/session/xgc*.bag --image-delay-ms 120 \
   --timing-topic /usb_cam/frame_timing \
   --output /data/session/alignment.yaml
@@ -127,7 +127,7 @@ An alignment sidecar does not implicitly alter rosbag or Lichtblick. Explicitly
 materialize only the low-bandwidth scene/TF topics on the image timeline:
 
 ```bash
-rosrun xgc_camera_driver xgc_camera_apply_alignment \
+rosrun xgc2_camera_driver xgc_camera_apply_alignment \
   /data/session/xgc*.bag \
   --alignment /data/session/alignment.yaml \
   --topic-map /tf=/xgc/aligned/tf \

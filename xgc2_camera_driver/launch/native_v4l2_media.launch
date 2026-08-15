@@ -13,7 +13,7 @@
   <arg name="rtp_port" default="5004" />
   <arg name="control_socket" default="/tmp/xgc2/media/camera.sock" />
 
-  <node pkg="xgc_camera_driver" type="xgc_native_v4l2_rtp" name="xgc_native_v4l2_rtp"
+  <node pkg="xgc2_camera_driver" type="xgc_native_v4l2_rtp" name="xgc_native_v4l2_rtp"
         output="screen"
         args="--device $(arg device) --width $(arg width) --height $(arg height) --fps $(arg fps) --pixel-format $(arg pixel_format) --encoder $(arg encoder) --bitrate $(arg bitrate) --source-id $(arg source_id) --frame-id $(arg frame_id) --rtp-host $(arg rtp_host) --rtp-port $(arg rtp_port) --control-socket $(arg control_socket)" />
 </launch>

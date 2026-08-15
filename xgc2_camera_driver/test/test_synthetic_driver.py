@@ -43,4 +43,4 @@ class SyntheticCameraContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     rospy.init_node("synthetic_camera_contract_test")
-    rostest.rosrun("xgc_camera_driver", "synthetic_camera_contract", SyntheticCameraContractTest)
+    rostest.rosrun("xgc2_camera_driver", "synthetic_camera_contract", SyntheticCameraContractTest)

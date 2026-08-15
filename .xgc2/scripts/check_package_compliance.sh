@@ -10,7 +10,7 @@ for script in .xgc2/scripts/*.sh; do
 done
 
 PYTHONPYCACHEPREFIX="${TMPDIR:-/tmp}/xgc2-camera-pycache" python3 -m py_compile \
-  xgc_camera_driver/test/*.py \
+  xgc2_camera_driver/test/*.py \
   .xgc2/scripts/xgc2_artifact_manifest.py
 
 MANIFEST_TEST_ROOT="$(mktemp -d)"
@@ -52,9 +52,9 @@ import pathlib
 import xml.etree.ElementTree as ET
 
 root = pathlib.Path(".")
-for path in sorted(root.glob("xgc_camera_*/package.xml")):
+for path in sorted(root.glob("xgc2_camera_*/package.xml")):
     ET.parse(path)
-for path in sorted(root.glob("xgc_camera_*/*/*.launch")):
+for path in sorted(root.glob("xgc2_camera_*/*/*.launch")):
     ET.parse(path)
 
 manifest_paths = list(
@@ -88,7 +88,7 @@ if grep -q '^    focal: .*~focal' .xgc2/product.yml; then
   echo "single-distribution ROS1 package version must not retain a focal suffix" >&2
   exit 1
 fi
-grep -q 'xgc2::camera' xgc_camera_driver/CMakeLists.txt
+grep -q 'xgc2::camera' xgc2_camera_driver/CMakeLists.txt
 grep -q 'ffmpeg, .*ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)' \
   .xgc2/scripts/package_debs.sh
 grep -q 'libxgc2-camera-dev (>= 0.1.0-7~focal)' \
