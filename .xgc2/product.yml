@@ -73,7 +73,7 @@ release:
   dependency_policy:
     libxgc2-camera-dev: rebuild
     xgc2-ros-msgs: rebuild
-  repository: lxk36/xgc2-camera-ros1
+  repository: XGC-Team/xgc2-camera-driver
   ref: main
   workflow: release.yml
   ci_workflow: ci.yml

@@ -66,7 +66,7 @@ publishing frames is not considered ready.
 
 General intrinsic calibration and fixed-world-camera extrinsic calibration are
 maintained and released separately in the public
-`lxk36/xgc2-camera-calibration-ros1` repository. The driver only consumes an
+`XGC-Team/xgc2-camera-calibration` repository. The driver only consumes an
 existing intrinsic YAML through the standard `camera_info_manager` contract.
 
 ## Build and release
