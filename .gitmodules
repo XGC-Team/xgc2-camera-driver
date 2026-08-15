@@ -1,0 +1,4 @@
+[submodule "d435"]
+	path = d435
+	url = git@github.com:XGC-Team/xgc2-camera-d435.git
+	branch = main
