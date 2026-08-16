@@ -66,7 +66,7 @@ assert set(manifest) == {
     "schema", "product", "source_sha", "version", "distribution",
     "architecture", "ci", "created_at", "debs",
 }
-assert manifest["schema"] == "xgc2.build-artifact.v2"
+assert manifest["schema"] == "xgc2.build-artifact.v1"
 assert manifest["product"] == "xgc2-camera-ros1"
 assert manifest["version"] == "0.3.0-2"
 assert set(manifest["ci"]) == {"run_id", "workflow", "workflow_ref"}
