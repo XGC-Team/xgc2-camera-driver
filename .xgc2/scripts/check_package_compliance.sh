@@ -95,10 +95,17 @@ grep -q 'libxgc2-camera-dev (>= 0.1.0-7~focal)' \
   .xgc2/scripts/package_debs.sh
 grep -q 'ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp' \
   .xgc2/scripts/package_debs.sh
-grep -q 'ros-noetic-foxglove-msgs ros-noetic-image-transport' \
+grep -q 'xgc2-build-focal-full-noetic:1.0.0' \
   .xgc2/scripts/build_debs_in_docker.sh
-grep -q 'ros-noetic-sensor-msgs ros-noetic-xgc2-camera-msgs' \
+grep -q 'libxgc2-camera-dev' \
   .xgc2/scripts/build_debs_in_docker.sh
+grep -q 'ros-noetic-xgc2-camera-msgs' \
+  .xgc2/scripts/build_debs_in_docker.sh
+if grep -Eq 'ros-noetic-(foxglove-msgs|image-transport|sensor-msgs)' \
+  .xgc2/scripts/build_debs_in_docker.sh; then
+  echo "third-party ROS build dependencies must come from the XGC2 image" >&2
+  exit 1
+fi
 if grep -R -E 'xgc_camera_calibration|xgc2-camera-(intrinsic|extrinsic)|xgc2-camera-calibration-ros1.json' \
   .xgc2/scripts/build_debs_in_docker.sh .xgc2/scripts/package_debs.sh \
   .xgc2/scripts/check_installed_packages.sh >/dev/null; then

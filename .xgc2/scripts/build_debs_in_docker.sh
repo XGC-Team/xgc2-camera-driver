@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-DOCKER_IMAGE="${DOCKER_IMAGE:-ros:noetic-ros-base-focal}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.0}"
 WORK_DIR="${WORK_DIR:-${REPO_ROOT}/.work/docker}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/debs}"
 INSTALL_CHECK="${INSTALL_CHECK:-true}"
@@ -30,23 +30,14 @@ docker run --rm \
   -v "${OUTPUT_DIR}:/workspace/out" \
   "${DOCKER_IMAGE}" bash -lc '
     set -euo pipefail
-    apt-get update
-    apt-get install -y --no-install-recommends ca-certificates
     echo "deb [trusted=yes arch=$(dpkg --print-architecture)] https://xgc2.apt.xiaokang.ink focal main" >/etc/apt/sources.list.d/xgc2.list
     if [[ -n "${XGC2_APT_OVERLAY_URL:-}" ]]; then
       sed "s#https://xgc2.apt.xiaokang.ink#${XGC2_APT_OVERLAY_URL%/}#g" /etc/apt/sources.list.d/xgc2.list >/etc/apt/sources.list.d/00-xgc2-release-train.list
     fi
     apt-get update
     apt-get install -y --no-install-recommends \
-      build-essential cmake dpkg-dev fakeroot git pkg-config rsync \
-      libavcodec-dev libavutil-dev libopencv-dev libswscale-dev libxgc2-camera-dev \
-      python3-nose python3-rospkg \
-      ros-noetic-camera-info-manager ros-noetic-cv-bridge \
-      ros-noetic-diagnostic-msgs ros-noetic-diagnostic-updater \
-      ros-noetic-foxglove-msgs ros-noetic-image-transport \
-      ros-noetic-roscpp ros-noetic-roslaunch \
-      ros-noetic-rospack ros-noetic-rospy ros-noetic-rostest ros-noetic-rostopic \
-      ros-noetic-sensor-msgs ros-noetic-xgc2-camera-msgs
+      libxgc2-camera-dev \
+      ros-noetic-xgc2-camera-msgs
     rm -rf /workspace/work/src /workspace/work/build /workspace/work/devel /workspace/work/install-root
     mkdir -p /workspace/work/src/xgc2_camera_driver
     rsync -a --delete /workspace/repo/xgc2_camera_driver/ /workspace/work/src/xgc2_camera_driver/
