@@ -41,6 +41,7 @@ extern "C" {
 
 #include <xgc2/camera/camera.hpp>
 
+#include "camera_info_contract.hpp"
 #include "clock_mapper.hpp"
 #include "h264_annex_b.hpp"
 #include "h264_input_buffer.hpp"
@@ -608,6 +609,14 @@ class CameraDriverNode {
     height_ = camera_->config().height;
     framerate_ = camera_->config().frame_rate;
     native_pixel_format_ = camera_->config().pixel_format;
+    const sensor_msgs::CameraInfo calibration =
+        camera_info_manager_->getCameraInfo();
+    xgc2_camera_driver::validateCalibrationGeometry(
+        camera_info_manager_->isCalibrated(),
+        calibration.width,
+        calibration.height,
+        width_,
+        height_);
 
     raw_image_publisher_ = image_transport_.advertise("image_raw", 1);
     camera_info_publisher_ =
@@ -682,8 +691,8 @@ class CameraDriverNode {
  private:
   void loadParameters()
   {
-    int width = 640;
-    int height = 480;
+    int width = 3840;
+    int height = 2160;
     int buffer_count = 4;
     int synthetic_seed = 1;
     int encoded_queue_capacity = 8;
@@ -691,10 +700,12 @@ class CameraDriverNode {
     std::string unknown_timestamp_clock;
     private_nh_.param<std::string>("backend", backend_, "v4l2");
     private_nh_.param<std::string>(
-        "video_device", video_device_, "/dev/video0");
+        "video_device",
+        video_device_,
+        "/dev/v4l/by-id/usb-LRCP_imx415_LRCP_imx415_01.00.00-video-index0");
     private_nh_.param("width", width, width);
     private_nh_.param("height", height, height);
-    private_nh_.param("framerate", framerate_, 30.0);
+    private_nh_.param("framerate", framerate_, 20.0);
     private_nh_.param<std::string>(
         "pixel_format", pixel_format_, "mjpeg");
     private_nh_.param<std::string>(
@@ -716,7 +727,7 @@ class CameraDriverNode {
     private_nh_.param<std::string>(
         "unknown_timestamp_clock",
         unknown_timestamp_clock,
-        "reject");
+        "assume_monotonic");
     private_nh_.param("publish_encoded", publish_encoded_, true);
     private_nh_.param("buffer_count", buffer_count, buffer_count);
     private_nh_.param(
@@ -1334,13 +1345,13 @@ class CameraDriverNode {
   RawPublishMode raw_publish_mode_{RawPublishMode::OnDemand};
   xgc2_camera_driver::timing::UnknownClockPolicy
       unknown_clock_policy_{
-          xgc2_camera_driver::timing::UnknownClockPolicy::Reject};
-  std::uint32_t width_{640};
-  std::uint32_t height_{480};
+          xgc2_camera_driver::timing::UnknownClockPolicy::AssumeMonotonic};
+  std::uint32_t width_{3840};
+  std::uint32_t height_{2160};
   std::uint32_t buffer_count_{4};
   std::uint32_t encoded_queue_capacity_{8};
   std::uint32_t synthetic_seed_{1};
-  double framerate_{30.0};
+  double framerate_{20.0};
   int capture_timeout_ms_{2000};
   bool publish_encoded_{true};
 

@@ -61,6 +61,7 @@ catkin_install_python(PROGRAMS
 
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
+  catkin_add_nosetests(test/test_4k_defaults.py)
   catkin_add_nosetests(test/test_camera_tools.py)
   catkin_add_gtest(test_h264_input_buffer test/test_h264_input_buffer.cpp)
   if(TARGET test_h264_input_buffer)
@@ -75,6 +76,11 @@ if(CATKIN_ENABLE_TESTING)
     target_compile_features(test_clock_mapper PRIVATE cxx_std_14)
     target_include_directories(test_clock_mapper PRIVATE src)
     target_link_libraries(test_clock_mapper xgc2::camera)
+  endif()
+  catkin_add_gtest(test_camera_info_contract test/test_camera_info_contract.cpp)
+  if(TARGET test_camera_info_contract)
+    target_compile_features(test_camera_info_contract PRIVATE cxx_std_14)
+    target_include_directories(test_camera_info_contract PRIVATE src)
   endif()
   catkin_add_gtest(test_h264_annex_b
     test/test_h264_annex_b.cpp

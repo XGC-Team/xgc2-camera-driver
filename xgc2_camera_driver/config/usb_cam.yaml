@@ -1,8 +1,8 @@
 backend: v4l2
-video_device: /dev/video0
-width: 1920
-height: 1080
-framerate: 30.0
+video_device: /dev/v4l/by-id/usb-LRCP_imx415_LRCP_imx415_01.00.00-video-index0
+width: 3840
+height: 2160
+framerate: 20.0
 pixel_format: mjpeg
 capture_mode: auto
 output_encoding: bgr8
@@ -17,5 +17,6 @@ publish_encoded: true
 raw_publish_mode: on_demand
 # Unknown V4L2 clock flags are never guessed. Set assume_monotonic or
 # assume_realtime only after verifying the camera driver contract.
-unknown_timestamp_clock: reject
+# The station LRCP imx415 contract was verified against the monotonic clock.
+unknown_timestamp_clock: assume_monotonic
 synthetic_seed: 1

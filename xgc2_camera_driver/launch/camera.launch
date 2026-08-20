@@ -3,10 +3,10 @@
   <arg name="node_name" default="driver" />
   <arg name="config_file" default="$(find xgc2_camera_driver)/config/usb_cam.yaml" />
   <arg name="backend" default="v4l2" />
-  <arg name="video_device" default="/dev/video0" />
-  <arg name="width" default="1920" />
-  <arg name="height" default="1080" />
-  <arg name="framerate" default="30.0" />
+  <arg name="video_device" default="/dev/v4l/by-id/usb-LRCP_imx415_LRCP_imx415_01.00.00-video-index0" />
+  <arg name="width" default="3840" />
+  <arg name="height" default="2160" />
+  <arg name="framerate" default="20.0" />
   <arg name="pixel_format" default="mjpeg" />
   <arg name="capture_mode" default="auto" />
   <arg name="output_encoding" default="bgr8" />
@@ -18,7 +18,7 @@
   <arg name="encoded_queue_capacity" default="8" />
   <arg name="publish_encoded" default="true" />
   <arg name="raw_publish_mode" default="on_demand" />
-  <arg name="unknown_timestamp_clock" default="reject" />
+  <arg name="unknown_timestamp_clock" default="assume_monotonic" />
   <arg name="capture_timeout_ms" default="2000" />
   <arg name="synthetic_seed" default="1" />
   <arg name="respawn" default="false" />

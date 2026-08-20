@@ -6,7 +6,7 @@ USB / V4L2 / FS150 live in this repository. D435 / D435i live in the nested
 
 | Camera | Path | What lives there | Launch |
 | --- | --- | --- | --- |
-| Lab USB | this repo `xgc2_camera_driver` | first-party V4L2 ROS driver | `usb_cam_compat.launch` (`/dev/video0`) |
+| Lab USB | this repo `xgc2_camera_driver` | first-party V4L2 ROS driver | `usb_cam_compat.launch` (LRCP imx415 by-id, native MJPEG 3840x2160 at 20 fps) |
 | FS150 board camera | this repo `xgc_native_v4l2_rtp` | first-party V4L2 RTP | `native_v4l2_media.launch` (`/dev/video8`, NV12) |
 | D435 / D435i | `d435/` (`xgc2-camera-d435`) | Intel `realsense2_camera` + URDF + XGC2 defaults | `roslaunch xgc2_camera_d435 d435.launch` |
 
@@ -34,9 +34,20 @@ sudo apt install ros-noetic-xgc2-camera-driver
 
 source /opt/ros/noetic/setup.bash
 roslaunch xgc2_camera_driver usb_cam_compat.launch \
-  video_device:=/dev/video0 width:=1920 height:=1080 \
-  framerate:=30 pixel_format:=mjpeg camera_info_url:=file:///path/intrinsics.yaml
+  camera_info_url:=file:///path/to/4k-intrinsics.yaml
 ```
+
+The lab USB default is deliberately fixed to the verified LRCP imx415
+`/dev/v4l/by-id` identity and its sustained native-MJPEG 3840x2160 at 20 fps
+profile. Recording, RViz compressed transport, and Lichtblick must consume
+`/usb_cam/image_raw/compressed` without substituting a 1920x1080 or 1280x720
+capture. A different device or profile requires an explicit deployment change;
+absence of the named camera is an error, not permission to fall back to another
+`/dev/video*` node or a lower resolution.
+
+This UVC device's timestamp behavior was verified on the station, so the fixed
+profile also uses `unknown_timestamp_clock=assume_monotonic`. Deployments for a
+different camera must verify and explicitly replace that clock contract.
 
 The compatibility contract is:
 

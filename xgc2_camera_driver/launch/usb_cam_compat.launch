@@ -1,10 +1,10 @@
 <launch>
   <!-- Compatibility contract: /usb_cam/image_raw and /usb_cam/camera_info. -->
   <arg name="backend" default="v4l2" />
-  <arg name="video_device" default="/dev/video0" />
-  <arg name="width" default="1920" />
-  <arg name="height" default="1080" />
-  <arg name="framerate" default="30.0" />
+  <arg name="video_device" default="/dev/v4l/by-id/usb-LRCP_imx415_LRCP_imx415_01.00.00-video-index0" />
+  <arg name="width" default="3840" />
+  <arg name="height" default="2160" />
+  <arg name="framerate" default="20.0" />
   <arg name="pixel_format" default="mjpeg" />
   <arg name="capture_mode" default="auto" />
   <arg name="output_encoding" default="bgr8" />

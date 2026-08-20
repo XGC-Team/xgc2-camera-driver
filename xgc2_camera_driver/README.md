@@ -3,6 +3,11 @@
 The driver preserves a camera's native compressed stream instead of routing
 4K video through a raw-image decode/re-encode loop.
 
+The shipped LRCP imx415 profile is fixed at native MJPEG 3840x2160 at 20 fps.
+This is the sustained physical-camera baseline verified on the station. RViz,
+Lichtblick, calibration snapshots, and scientific bags must retain those source
+dimensions; 1080p or 720p is not a successful fallback.
+
 ## Media Edge (WebRTC)
 
 Live browser preview is **not** `ros_image_rtp_adapter` unless another
@@ -61,10 +66,14 @@ therefore cannot move the raw preview onto a different timestamp. A clock
 domain or SOE/EOF reference change starts a new stream epoch. Values outside
 the representable ROS 1 time range are rejected instead of wrapping.
 
-The default `unknown_timestamp_clock=reject` deliberately publishes no frame
-whose source clock cannot be identified. It never substitutes `ros::Time::now`.
-Use `assume_monotonic` or `assume_realtime` only when the deployed V4L2 driver
-has been independently verified.
+The `reject` policy remains available and deliberately publishes no frame whose
+source clock cannot be identified; the driver never substitutes
+`ros::Time::now`. The shipped station profile has been independently verified
+and therefore selects `assume_monotonic`.
+
+When a calibration URL is supplied, its `image_width` and
+`image_height` must be exactly 3840x2160. A 1080p or 720p intrinsic file is
+rejected at startup instead of being relabeled as 4K CameraInfo.
 
 ## H.264 recovery
 
