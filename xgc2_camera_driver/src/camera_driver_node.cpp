@@ -1403,12 +1403,30 @@ int main(int argc, char** argv)
   ros::init(argc, argv, "xgc2_camera_driver");
   ros::AsyncSpinner spinner(1);
   spinner.start();
-  try {
-    CameraDriverNode node;
-    return node.run();
-  } catch (const std::exception& error) {
-    ROS_FATAL_STREAM(
-        "XGC2 camera driver failed: " << error.what());
-    return 1;
+
+  ros::NodeHandle private_nh("~");
+  std::string backend;
+  private_nh.param<std::string>("backend", backend, "v4l2");
+  while (ros::ok()) {
+    try {
+      CameraDriverNode node;
+      return node.run();
+    } catch (const xgc2::camera::CameraError& error) {
+      if (backend != "v4l2") {
+        ROS_FATAL_STREAM(
+            "XGC2 camera driver failed: " << error.what());
+        return 1;
+      }
+      ROS_WARN_STREAM_THROTTLE(
+          10.0,
+          "XGC2 camera is unavailable; retaining the configured device and "
+          "waiting to reconnect: " << error.what());
+      ros::WallDuration(1.0).sleep();
+    } catch (const std::exception& error) {
+      ROS_FATAL_STREAM(
+          "XGC2 camera driver failed: " << error.what());
+      return 1;
+    }
   }
+  return 0;
 }
