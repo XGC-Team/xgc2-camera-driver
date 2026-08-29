@@ -721,7 +721,7 @@ class CameraDriverNode {
     private_nh_.param<std::string>(
         "frame_id", frame_id_, "usb_cam_optical_frame");
     private_nh_.param<std::string>(
-        "camera_info_url", camera_info_url_, "");
+        "camera_info_file", camera_info_file_, "");
     private_nh_.param<std::string>(
         "raw_publish_mode", raw_publish_mode, "on_demand");
     private_nh_.param<std::string>(
@@ -754,6 +754,13 @@ class CameraDriverNode {
       throw std::invalid_argument(
           "framerate, capture_timeout_ms, camera_name, stream_id, and "
           "frame_id must be valid");
+    }
+    if (!camera_info_file_.empty()) {
+      if (camera_info_file_.front() != '/') {
+        throw std::invalid_argument(
+            "camera_info_file must be an absolute file path");
+      }
+      camera_info_url_ = "file://" + camera_info_file_;
     }
     (void)xgc2::camera::backend_kind_from_string(backend_);
     (void)xgc2::camera::pixel_format_from_string(pixel_format_);
@@ -1296,7 +1303,7 @@ class CameraDriverNode {
         "encoded_publish_errors",
         encoded_publish_error_count_.load());
     status.add("camera_info_calibrated", calibrated);
-    status.add("camera_info_url", camera_info_url_);
+    status.add("camera_info_file", camera_info_file_);
     status.add("last_sequence", last_sequence_.load());
     status.add(
         "measured_publication_fps",
@@ -1340,6 +1347,7 @@ class CameraDriverNode {
   std::string camera_name_;
   std::string stream_id_;
   std::string frame_id_;
+  std::string camera_info_file_;
   std::string camera_info_url_;
   PixelFormat native_pixel_format_{PixelFormat::Unknown};
   RawPublishMode raw_publish_mode_{RawPublishMode::OnDemand};
