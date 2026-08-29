@@ -10,7 +10,7 @@ dpkg -s ros-noetic-xgc2-camera-driver >/dev/null
 test "$(rospack find xgc2_camera_driver)" = "${PREFIX}/share/xgc2_camera_driver"
 test -x "${DRIVER}"
 roslaunch --files xgc2_camera_driver camera.launch >/dev/null
-roslaunch --files xgc2_camera_driver usb_cam_compat.launch >/dev/null
+roslaunch --files xgc2_camera_driver usb_camera_4k.launch >/dev/null
 if ldd "${DRIVER}" | grep -q 'not found'; then
   ldd "${DRIVER}" >&2
   exit 1

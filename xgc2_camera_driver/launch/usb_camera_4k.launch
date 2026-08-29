@@ -1,5 +1,5 @@
 <launch>
-  <!-- Compatibility contract: /usb_cam/image_raw and /usb_cam/camera_info. -->
+  <!-- Station contract: /usb_cam/image_raw and /usb_cam/camera_info. -->
   <arg name="backend" default="v4l2" />
   <arg name="video_device" default="/dev/v4l/by-id/usb-LRCP_imx415_LRCP_imx415_01.00.00-video-index0" />
   <arg name="width" default="3840" />
@@ -8,7 +8,7 @@
   <arg name="pixel_format" default="mjpeg" />
   <arg name="capture_mode" default="auto" />
   <arg name="output_encoding" default="bgr8" />
-  <arg name="camera_info_url" default="" />
+  <arg name="camera_info_file" default="" />
   <arg name="buffer_count" default="4" />
   <arg name="capture_timeout_ms" default="2000" />
   <arg name="synthetic_seed" default="1" />
@@ -23,7 +23,7 @@
     <arg name="pixel_format" value="$(arg pixel_format)" />
     <arg name="capture_mode" value="$(arg capture_mode)" />
     <arg name="output_encoding" value="$(arg output_encoding)" />
-    <arg name="camera_info_url" value="$(arg camera_info_url)" />
+    <arg name="camera_info_file" value="$(arg camera_info_file)" />
     <arg name="buffer_count" value="$(arg buffer_count)" />
     <arg name="capture_timeout_ms" value="$(arg capture_timeout_ms)" />
     <arg name="synthetic_seed" value="$(arg synthetic_seed)" />

@@ -9,7 +9,7 @@ output_encoding: bgr8
 camera_name: usb_cam
 stream_id: usb_cam
 frame_id: usb_cam_optical_frame
-camera_info_url: ""
+camera_info_file: ""
 capture_timeout_ms: 2000
 buffer_count: 4
 encoded_queue_capacity: 8

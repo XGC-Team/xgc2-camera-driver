@@ -6,7 +6,7 @@ USB / V4L2 / FS150 live in this repository. D435 / D435i live in the nested
 
 | Camera | Path | What lives there | Launch |
 | --- | --- | --- | --- |
-| Lab USB | this repo `xgc2_camera_driver` | first-party V4L2 ROS driver | `usb_cam_compat.launch` (LRCP imx415 by-id, native MJPEG 3840x2160 at 30 fps, 110° lens) |
+| Lab USB | this repo `xgc2_camera_driver` | first-party V4L2 ROS driver | `usb_camera_4k.launch` (LRCP imx415 by-id, native MJPEG 3840x2160 at 30 fps, 110° lens) |
 | FS150 board camera | this repo `xgc_native_v4l2_rtp` | first-party V4L2 RTP | `native_v4l2_media.launch` (`/dev/video8`, NV12) |
 | D435 / D435i | `d435/` (`xgc2-camera-d435`) | Intel `realsense2_camera` + URDF + XGC2 defaults | `roslaunch xgc2_camera_d435 d435.launch` |
 
@@ -33,8 +33,8 @@ sudo apt update
 sudo apt install ros-noetic-xgc2-camera-driver
 
 source /opt/ros/noetic/setup.bash
-roslaunch xgc2_camera_driver usb_cam_compat.launch \
-  camera_info_url:=file:///path/to/4k-intrinsics.yaml
+roslaunch xgc2_camera_driver usb_camera_4k.launch \
+  camera_info_file:=/absolute/path/to/intrinsics-UTC.yaml
 ```
 
 The lab USB default requests the LRCP imx415 `/dev/v4l/by-id` identity and its
@@ -49,7 +49,7 @@ This UVC device's timestamp behavior was verified on the station, so the fixed
 profile also uses `unknown_timestamp_clock=assume_monotonic`. Deployments for a
 different camera must verify and explicitly replace that clock contract.
 
-The compatibility contract is:
+The published ROS contract is:
 
 ```text
 /usb_cam/image_raw   sensor_msgs/Image
@@ -59,14 +59,14 @@ frame_id             usb_cam_optical_frame
 ```
 
 `Image` and `CameraInfo` share the same timestamp, dimensions and frame. Until
-valid intrinsics are supplied through `camera_info_url`, `CameraInfo.K` remains
+valid intrinsics are supplied through the absolute `camera_info_file`, `CameraInfo.K` remains
 zero and diagnostics report that the camera is uncalibrated; the driver does
 not invent calibration values.
 
 Main private parameters are `backend`, `video_device`, `width`, `height`,
 `framerate`, `pixel_format`, `capture_mode`, `buffer_count`,
 `capture_timeout_ms`, `output_encoding`, `camera_name`, `frame_id` and
-`camera_info_url`. Supported capture formats are MJPEG, H264, YUYV, UYVY,
+`camera_info_file`. Supported capture formats are MJPEG, H264, YUYV, UYVY,
 RGB24, BGR24, NV12 and GREY. Output is `bgr8`, `rgb8` or `mono8`.
 
 For deterministic tests without camera hardware:

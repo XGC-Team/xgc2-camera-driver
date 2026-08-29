@@ -28,7 +28,7 @@ class FourKDefaultsTest(unittest.TestCase):
         self.assertEqual(values["unknown_timestamp_clock"], "assume_monotonic")
 
     def test_launch_defaults_cannot_silently_fall_back(self):
-        for relative in ("launch/camera.launch", "launch/usb_cam_compat.launch"):
+        for relative in ("launch/camera.launch", "launch/usb_camera_4k.launch"):
             root = ET.parse(PACKAGE / relative).getroot()
             defaults = {
                 node.attrib["name"]: node.attrib.get("default")

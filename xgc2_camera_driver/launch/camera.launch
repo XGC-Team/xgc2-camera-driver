@@ -13,7 +13,7 @@
   <arg name="camera_name" default="usb_cam" />
   <arg name="stream_id" default="$(arg camera_name)" />
   <arg name="frame_id" default="usb_cam_optical_frame" />
-  <arg name="camera_info_url" default="" />
+  <arg name="camera_info_file" default="" />
   <arg name="buffer_count" default="4" />
   <arg name="encoded_queue_capacity" default="8" />
   <arg name="publish_encoded" default="true" />
@@ -41,7 +41,7 @@
       <param name="camera_name" value="$(arg camera_name)" />
       <param name="stream_id" value="$(arg stream_id)" />
       <param name="frame_id" value="$(arg frame_id)" />
-      <param name="camera_info_url" value="$(arg camera_info_url)" />
+      <param name="camera_info_file" value="$(arg camera_info_file)" />
       <param name="buffer_count" value="$(arg buffer_count)" />
       <param name="encoded_queue_capacity" value="$(arg encoded_queue_capacity)" />
       <param name="publish_encoded" value="$(arg publish_encoded)" />

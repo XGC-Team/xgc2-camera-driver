@@ -112,5 +112,14 @@ if grep -R -E 'xgc_camera_calibration|xgc2-camera-(intrinsic|extrinsic)|xgc2-cam
   echo "calibration implementation leaked into the ROS camera driver product" >&2
   exit 1
 fi
+if grep -R -E 'usb_cam_compat|camera_info_url' \
+  README.md xgc2_camera_driver/config xgc2_camera_driver/launch \
+  .xgc2/scripts/check_installed_packages.sh >/dev/null; then
+  echo "public camera driver contract retained a removed compatibility input" >&2
+  exit 1
+fi
+grep -q '<arg name="camera_info_file" default=""' \
+  xgc2_camera_driver/launch/camera.launch \
+  xgc2_camera_driver/launch/usb_camera_4k.launch
 
 echo "ROS1 camera product compliance passed"
