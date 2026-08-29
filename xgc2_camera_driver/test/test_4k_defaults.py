@@ -42,6 +42,14 @@ class FourKDefaultsTest(unittest.TestCase):
             if relative == "launch/camera.launch":
                 self.assertEqual(defaults["unknown_timestamp_clock"], "assume_monotonic")
 
+    def test_camera_info_file_is_a_concrete_physical_intrinsic(self):
+        source = (PACKAGE / "src/camera_driver_node.cpp").read_text(encoding="utf-8")
+        contract = (PACKAGE / "src/camera_info_contract.hpp").read_text(encoding="utf-8")
+        self.assertIn("canonicalPhysicalCameraInfoFile", source)
+        self.assertIn("validateStableCameraName", source)
+        self.assertIn("camera_partition != camera_name", contract)
+        self.assertIn('mode_partition != "phy"', contract)
+
 
 if __name__ == "__main__":
     unittest.main()

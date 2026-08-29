@@ -750,16 +750,15 @@ class CameraDriverNode {
     synthetic_seed_ = static_cast<std::uint32_t>(
         synthetic_seed < 0 ? 0 : synthetic_seed);
     if (framerate_ <= 0.0 || capture_timeout_ms_ <= 0 ||
-        camera_name_.empty() || stream_id_.empty() || frame_id_.empty()) {
+        stream_id_.empty() || frame_id_.empty()) {
       throw std::invalid_argument(
           "framerate, capture_timeout_ms, camera_name, stream_id, and "
           "frame_id must be valid");
     }
+    camera_name_ = xgc2_camera_driver::validateStableCameraName(camera_name_);
     if (!camera_info_file_.empty()) {
-      if (camera_info_file_.front() != '/') {
-        throw std::invalid_argument(
-            "camera_info_file must be an absolute file path");
-      }
+      camera_info_file_ = xgc2_camera_driver::canonicalPhysicalCameraInfoFile(
+          camera_info_file_, camera_name_);
       camera_info_url_ = "file://" + camera_info_file_;
     }
     (void)xgc2::camera::backend_kind_from_string(backend_);

@@ -34,7 +34,8 @@ sudo apt install ros-noetic-xgc2-camera-driver
 
 source /opt/ros/noetic/setup.bash
 roslaunch xgc2_camera_driver usb_camera_4k.launch \
-  camera_info_file:=/absolute/path/to/intrinsics-UTC.yaml
+  camera_name:=usb_cam \
+  camera_info_file:=/home/operator/Documents/XGC/Calibration/camera/phy/usb_cam/intrinsics-20260830T120000.000000Z.yaml
 ```
 
 The lab USB default requests the LRCP imx415 `/dev/v4l/by-id` identity and its
@@ -59,7 +60,8 @@ frame_id             usb_cam_optical_frame
 ```
 
 `Image` and `CameraInfo` share the same timestamp, dimensions and frame. Until
-valid intrinsics are supplied through the absolute `camera_info_file`, `CameraInfo.K` remains
+valid intrinsics are supplied through the concrete timestamped
+`<root>/phy/<camera_name>/intrinsics-<UTC>.yaml` `camera_info_file`, `CameraInfo.K` remains
 zero and diagnostics report that the camera is uncalibrated; the driver does
 not invent calibration values.
 
