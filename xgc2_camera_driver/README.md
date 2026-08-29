@@ -3,8 +3,9 @@
 The driver preserves a camera's native compressed stream instead of routing
 4K video through a raw-image decode/re-encode loop.
 
-The shipped LRCP imx415 profile is fixed at native MJPEG 3840x2160 at 20 fps.
-This is the sustained physical-camera baseline verified on the station. RViz,
+The shipped LRCP imx415 profile requests native MJPEG 3840x2160 at 30 fps with
+the 110° lens. A lower measured delivery rate is runtime evidence about the
+physical camera path, not a configured fallback. RViz,
 Lichtblick, calibration snapshots, and scientific bags must retain those source
 dimensions; 1080p or 720p is not a successful fallback.
 

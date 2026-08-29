@@ -22,7 +22,7 @@ class FourKDefaultsTest(unittest.TestCase):
         self.assertEqual(values["video_device"], DEVICE)
         self.assertEqual(values["width"], "3840")
         self.assertEqual(values["height"], "2160")
-        self.assertEqual(values["framerate"], "20.0")
+        self.assertEqual(values["framerate"], "30.0")
         self.assertEqual(values["pixel_format"], "mjpeg")
         self.assertEqual(values["publish_encoded"], "true")
         self.assertEqual(values["unknown_timestamp_clock"], "assume_monotonic")
@@ -37,7 +37,7 @@ class FourKDefaultsTest(unittest.TestCase):
             self.assertEqual(defaults["video_device"], DEVICE, relative)
             self.assertEqual(defaults["width"], "3840", relative)
             self.assertEqual(defaults["height"], "2160", relative)
-            self.assertEqual(defaults["framerate"], "20.0", relative)
+            self.assertEqual(defaults["framerate"], "30.0", relative)
             self.assertEqual(defaults["pixel_format"], "mjpeg", relative)
             if relative == "launch/camera.launch":
                 self.assertEqual(defaults["unknown_timestamp_clock"], "assume_monotonic")

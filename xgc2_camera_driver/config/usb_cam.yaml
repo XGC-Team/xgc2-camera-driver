@@ -2,7 +2,7 @@ backend: v4l2
 video_device: /dev/v4l/by-id/usb-LRCP_imx415_LRCP_imx415_01.00.00-video-index0
 width: 3840
 height: 2160
-framerate: 20.0
+framerate: 30.0
 pixel_format: mjpeg
 capture_mode: auto
 output_encoding: bgr8
