@@ -61,9 +61,10 @@ frame_id             usb_cam_optical_frame
 
 `Image` and `CameraInfo` share the same timestamp, dimensions and frame. Until
 valid intrinsics are supplied through the concrete timestamped
-`<root>/phy/<camera_name>/intrinsics-<UTC>.yaml` `camera_info_file`, `CameraInfo.K` remains
-zero and diagnostics report that the camera is uncalibrated; the driver does
-not invent calibration values.
+`<root>/phy/<camera_name>/intrinsics-<UTC>.yaml` `camera_info_file`, the driver
+publishes a default 110° plumb-bob pinhole (`D=0`) matching capture width/height
+so image and AR consumers still start; diagnostics still report uncalibrated.
+That default is not a saved calibration.
 
 Main private parameters are `backend`, `video_device`, `width`, `height`,
 `framerate`, `pixel_format`, `capture_mode`, `buffer_count`,

@@ -1210,6 +1210,28 @@ class CameraDriverNode {
     camera_info.header = header;
     camera_info.width = width_;
     camera_info.height = height_;
+    if (!camera_info_manager_->isCalibrated()) {
+      const auto pinhole = xgc2_camera_driver::defaultUncalibratedPinhole(
+          width_, height_);
+      camera_info.distortion_model = "plumb_bob";
+      camera_info.D.assign(5U, 0.0);
+      camera_info.K.fill(0.0);
+      camera_info.K[0] = pinhole.fx;
+      camera_info.K[2] = pinhole.cx;
+      camera_info.K[4] = pinhole.fy;
+      camera_info.K[5] = pinhole.cy;
+      camera_info.K[8] = 1.0;
+      camera_info.R.fill(0.0);
+      camera_info.R[0] = 1.0;
+      camera_info.R[4] = 1.0;
+      camera_info.R[8] = 1.0;
+      camera_info.P.fill(0.0);
+      camera_info.P[0] = pinhole.fx;
+      camera_info.P[2] = pinhole.cx;
+      camera_info.P[5] = pinhole.fy;
+      camera_info.P[6] = pinhole.cy;
+      camera_info.P[10] = 1.0;
+    }
     camera_info_publisher_.publish(camera_info);
   }
 

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -19,6 +20,32 @@ TEST(CameraInfoContract, AllowsAnExplicitlyUncalibratedStream)
 {
   EXPECT_NO_THROW(xgc2_camera_driver::validateCalibrationGeometry(
       false, 0U, 0U, 3840U, 2160U));
+}
+
+TEST(CameraInfoContract, DefaultPinholeMatchesWorldCamera110DegAperture)
+{
+  const auto pinhole =
+      xgc2_camera_driver::defaultUncalibratedPinhole(3840U, 2160U);
+  const double expected_fx =
+      3840.0 / (2.0 * std::tan(55.0 * std::acos(-1.0) / 180.0));
+  EXPECT_NEAR(pinhole.fx, expected_fx, 1e-9);
+  EXPECT_NEAR(pinhole.fx, 1344.398473, 1e-6);
+  EXPECT_NEAR(pinhole.fy, pinhole.fx, 1e-12);
+  EXPECT_DOUBLE_EQ(pinhole.cx, 1919.5);
+  EXPECT_DOUBLE_EQ(pinhole.cy, 1079.5);
+}
+
+TEST(CameraInfoContract, DefaultPinholeRejectsInvalidGeometry)
+{
+  EXPECT_THROW(
+      xgc2_camera_driver::defaultUncalibratedPinhole(0U, 2160U),
+      std::invalid_argument);
+  EXPECT_THROW(
+      xgc2_camera_driver::defaultUncalibratedPinhole(3840U, 2160U, 0.0),
+      std::invalid_argument);
+  EXPECT_THROW(
+      xgc2_camera_driver::defaultUncalibratedPinhole(3840U, 2160U, 180.0),
+      std::invalid_argument);
 }
 
 TEST(CameraInfoContract, RejectsRelabeled1080pIntrinsicsFor4KCapture)

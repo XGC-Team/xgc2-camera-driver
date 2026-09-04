@@ -47,8 +47,10 @@ class FourKDefaultsTest(unittest.TestCase):
         contract = (PACKAGE / "src/camera_info_contract.hpp").read_text(encoding="utf-8")
         self.assertIn("canonicalPhysicalCameraInfoFile", source)
         self.assertIn("validateStableCameraName", source)
+        self.assertIn("defaultUncalibratedPinhole", source)
         self.assertIn("camera_partition != camera_name", contract)
         self.assertIn('mode_partition != "phy"', contract)
+        self.assertIn("kDefaultUncalibratedHorizontalFovDegrees = 110.0", contract)
 
 
 if __name__ == "__main__":

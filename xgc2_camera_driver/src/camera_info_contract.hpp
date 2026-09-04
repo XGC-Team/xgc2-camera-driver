@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <climits>
 #include <cstdint>
 #include <cstdlib>
@@ -9,6 +10,40 @@
 #include <string>
 
 namespace xgc2_camera_driver {
+
+constexpr double kDefaultUncalibratedHorizontalFovDegrees = 110.0;
+
+struct DefaultPinholeIntrinsics {
+  double fx;
+  double fy;
+  double cx;
+  double cy;
+};
+
+inline DefaultPinholeIntrinsics defaultUncalibratedPinhole(
+    const std::uint32_t width,
+    const std::uint32_t height,
+    const double horizontal_fov_degrees =
+        kDefaultUncalibratedHorizontalFovDegrees)
+{
+  if (width == 0U || height == 0U) {
+    throw std::invalid_argument(
+        "default pinhole requires positive capture geometry");
+  }
+  if (!(horizontal_fov_degrees > 0.0 && horizontal_fov_degrees < 180.0) ||
+      !std::isfinite(horizontal_fov_degrees)) {
+    throw std::invalid_argument(
+        "default pinhole horizontal FOV must be between 0 and 180 degrees");
+  }
+  const double theta = horizontal_fov_degrees * std::acos(-1.0) / 180.0;
+  const double focal = static_cast<double>(width) /
+                       (2.0 * std::tan(theta / 2.0));
+  return DefaultPinholeIntrinsics{
+      focal,
+      focal,
+      (static_cast<double>(width) - 1.0) / 2.0,
+      (static_cast<double>(height) - 1.0) / 2.0};
+}
 
 inline std::string validateStableCameraName(const std::string& value)
 {
