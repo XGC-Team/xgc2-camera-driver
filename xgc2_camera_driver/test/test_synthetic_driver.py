@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import math
 import unittest
 
 import rospy
@@ -18,7 +19,17 @@ class SyntheticCameraContractTest(unittest.TestCase):
         self.assertEqual(image.header.frame_id, "usb_cam_optical_frame")
         self.assertEqual(info.header.frame_id, image.header.frame_id)
         self.assertGreater(image.header.stamp.to_nsec(), 0)
-        self.assertEqual(list(info.K), [0.0] * 9)
+        focal = 320.0 / (2.0 * math.tan(math.radians(110.0) / 2.0))
+        self.assertEqual(info.distortion_model, "plumb_bob")
+        self.assertEqual(list(info.D), [0.0] * 5)
+        self.assertAlmostEqual(info.K[0], focal, places=9)
+        self.assertEqual(info.K[1], 0.0)
+        self.assertAlmostEqual(info.K[2], 159.5, places=9)
+        self.assertEqual(info.K[3], 0.0)
+        self.assertAlmostEqual(info.K[4], focal, places=9)
+        self.assertAlmostEqual(info.K[5], 119.5, places=9)
+        self.assertEqual(list(info.K[6:8]), [0.0, 0.0])
+        self.assertEqual(info.K[8], 1.0)
 
         deadline = rospy.Time.now() + rospy.Duration(10.0)
         camera_status = None
