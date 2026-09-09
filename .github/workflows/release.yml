@@ -69,31 +69,36 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {architecture: amd64, runner: ubuntu-latest}
-          - {architecture: arm64, runner: ubuntu-24.04-arm}
+          - {architecture: amd64, runner: ubuntu-latest, distribution: bionic, image: ghcr.io/xgc-team/xgc2-images/xgc2-build-bionic-full-melodic:1.0.0}
+          - {architecture: arm64, runner: ubuntu-24.04-arm, distribution: bionic, image: ghcr.io/xgc-team/xgc2-images/xgc2-build-bionic-full-melodic:1.0.0}
+          - {architecture: amd64, runner: ubuntu-latest, distribution: focal, image: ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.0}
+          - {architecture: arm64, runner: ubuntu-24.04-arm, distribution: focal, image: ghcr.io/xgc-team/xgc2-images/xgc2-build-focal-full-noetic:1.0.0}
     runs-on: ${{ matrix.runner }}
     env:
       PACKAGE_VERSION: ${{ needs.validate.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare host CI directories
+        run: install -d "$GITHUB_WORKSPACE/.ci/build-manifests"
       - name: Build, test, and install-check camera driver release package
         run: |
           .xgc2/scripts/build_debs_in_docker.sh \
-            --work-dir "$RUNNER_TEMP/xgc2-camera-ros1-${{ matrix.architecture }}" \
+            --image "${{ matrix.image }}" \
+            --work-dir "$RUNNER_TEMP/xgc2-camera-ros1-${{ matrix.distribution }}-${{ matrix.architecture }}" \
             --output-dir "$GITHUB_WORKSPACE/debs"
       - name: Create release-train manifest
         run: |
           python3 .xgc2/scripts/xgc2_artifact_manifest.py build \
             --deb-dir debs --output-dir .ci/build-manifests \
             --product xgc2-camera-ros1 --product-version "${{ inputs.expected_version }}" \
-            --distribution focal --architecture "${{ matrix.architecture }}" \
+            --distribution "${{ matrix.distribution }}" --architecture "${{ matrix.architecture }}" \
             --source-sha "${{ inputs.expected_source_sha }}" --ci-run-id "$GITHUB_RUN_ID" \
             --ci-workflow "$GITHUB_WORKFLOW" --ci-workflow-ref "$GITHUB_WORKFLOW_REF"
       - name: Upload release artifacts
         if: ${{ inputs.prepare_action == 'release' }}
         uses: actions/upload-artifact@v4
         with:
-          name: xgc2-camera-ros1-release-debs-${{ matrix.architecture }}
+          name: xgc2-camera-ros1-release-debs-${{ matrix.distribution }}-${{ matrix.architecture }}
           path: |
             debs/*.deb
             .ci/build-manifests/*.json

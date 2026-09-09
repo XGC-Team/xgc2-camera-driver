@@ -82,26 +82,31 @@ assert deb["size"] > 0
 PY
 
 grep -q '^id: xgc2-camera-ros1$' .xgc2/product.yml
-grep -q '^version: 0.3.0-16$' .xgc2/product.yml
-grep -q '^    focal: 0.3.0-16$' .xgc2/product.yml
+grep -q '^version: 0.3.0-17$' .xgc2/product.yml
+grep -q '^    bionic: 0.3.0-17$' .xgc2/product.yml
+grep -q '^    focal: 0.3.0-17$' .xgc2/product.yml
 if grep -q '^    focal: .*~focal' .xgc2/product.yml; then
-  echo "single-distribution ROS1 package version must not retain a focal suffix" >&2
+  echo "ROS1 package version must not retain a focal suffix" >&2
   exit 1
 fi
 grep -q 'xgc2::camera' xgc2_camera_driver/CMakeLists.txt
-grep -q 'ffmpeg, .*ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)' \
+grep -q 'libxgc2-camera-dev (>= 0.1.0-10~bionic)' \
   .xgc2/scripts/package_debs.sh
-grep -q 'libxgc2-camera-dev (>= 0.1.0-7~focal)' \
+grep -q 'libxgc2-camera-dev (>= 0.1.0-10~focal)' \
+  .xgc2/scripts/package_debs.sh
+grep -q 'ros-melodic-image-transport, ros-melodic-rosbag, ros-melodic-roscpp' \
   .xgc2/scripts/package_debs.sh
 grep -q 'ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp' \
   .xgc2/scripts/package_debs.sh
+grep -q 'xgc2-build-bionic-full-melodic:1.0.0' \
+  .github/workflows/ci.yml
 grep -q 'xgc2-build-focal-full-noetic:1.0.0' \
-  .xgc2/scripts/build_debs_in_docker.sh
+  .github/workflows/ci.yml
 grep -q 'libxgc2-camera-dev' \
   .xgc2/scripts/build_debs_in_docker.sh
-grep -q 'ros-noetic-xgc2-camera-msgs' \
+grep -q 'ros-${ROS_DISTRO}-xgc2-camera-msgs' \
   .xgc2/scripts/build_debs_in_docker.sh
-if grep -Eq 'ros-noetic-(foxglove-msgs|image-transport|sensor-msgs)' \
+if grep -E 'apt-get .*(foxglove-msgs|image-transport|sensor-msgs|camera-info-manager)' \
   .xgc2/scripts/build_debs_in_docker.sh; then
   echo "third-party ROS build dependencies must come from the XGC2 image" >&2
   exit 1
@@ -121,5 +126,13 @@ fi
 grep -q '<arg name="camera_info_file" default=""' \
   xgc2_camera_driver/launch/camera.launch \
   xgc2_camera_driver/launch/usb_camera_4k.launch
+test -f foxglove_msgs/msg/CompressedVideo.msg
+test -f foxglove_msgs/package.xml
+if grep -E 'xgc2_camera_d435|xgc2-camera-d435' .xgc2/scripts/package_debs.sh \
+  .xgc2/scripts/build_debs_in_docker.sh \
+  .xgc2/scripts/check_installed_packages.sh; then
+  echo "retired xgc2_camera_d435 must not enter the camera-driver package" >&2
+  exit 1
+fi
 
 echo "ROS1 camera product compliance passed"

@@ -1,17 +1,17 @@
 # XGC2 ROS1 Camera Driver
 
-Child of the [`xgc2-camera`](https://github.com/XGC-Team/xgc2-camera) product.
-USB / V4L2 / FS150 live in this repository. D435 / D435i live in the nested
-[`d435/`](https://github.com/XGC-Team/xgc2-camera-d435) child.
+Child of [`libxgc2-camera-dev`](https://github.com/XGC-Team/xgc2-camera-core).
+USB / V4L2 capture, native RTP, and ROS Image RTP live in this repository.
+Robots assemble this package; they do not vendor a second V4L2 publisher.
 
 | Camera | Path | What lives there | Launch |
 | --- | --- | --- | --- |
-| Lab USB | this repo `xgc2_camera_driver` | first-party V4L2 ROS driver | `usb_camera_4k.launch` (LRCP imx415 by-id, native MJPEG 3840x2160 at 30 fps, 110° lens) |
-| FS150 board camera | this repo `xgc_native_v4l2_rtp` | first-party V4L2 RTP | `native_v4l2_media.launch` (`/dev/video8`, NV12) |
-| D435 / D435i | `d435/` (`xgc2-camera-d435`) | Intel `realsense2_camera` + URDF + XGC2 defaults | `roslaunch xgc2_camera_d435 d435.launch` |
+| Lab USB | `xgc2_camera_driver` | first-party V4L2 ROS driver | `usb_camera_4k.launch` (LRCP imx415 by-id, native MJPEG 3840x2160 at 30 fps, 110° lens) |
+| FS150 board camera | `xgc_native_v4l2_rtp` | first-party V4L2 RTP | `native_v4l2_media.launch` (`/dev/video8`, NV12) |
+| Scout D435 color | `xgc2_camera_driver` | first-party V4L2 ROS driver | robot `camera.launch` names the by-id node; do not launch `xgc2_camera_d435` |
 
 This product turns one fixed or general-purpose Linux camera into a supervised
-ROS Noetic process. It is strictly the ROS interface adapter in the camera
+ROS Melodic or Noetic process. It is strictly the ROS interface adapter in the camera
 stack:
 
 ```text
@@ -30,6 +30,7 @@ calibration algorithms or perception applications.
 
 ```bash
 sudo apt update
+sudo apt install ros-melodic-xgc2-camera-driver
 sudo apt install ros-noetic-xgc2-camera-driver
 
 source /opt/ros/noetic/setup.bash
@@ -96,6 +97,7 @@ existing intrinsic YAML through the standard `camera_info_manager` contract.
 ## Build and release
 
 CI builds and tests the driver against the release-resolved
-`libxgc2-camera-dev`, creates `ros-noetic-xgc2-camera-driver` for Focal `amd64`
-and `arm64`, installs it in a clean container, and verifies the synthetic ROS
-topic contract and linked libraries.
+`libxgc2-camera-dev`, creates `ros-melodic-xgc2-camera-driver` (Bionic) and
+`ros-noetic-xgc2-camera-driver` (Focal) for `amd64` and `arm64`, installs each
+in a clean container, and verifies the installed launches and RTP tools. Melodic
+has no archive `foxglove_msgs`, so that interface is built with this package.
