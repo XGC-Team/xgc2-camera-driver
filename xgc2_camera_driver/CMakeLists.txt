@@ -54,6 +54,7 @@ catkin_install_python(PROGRAMS
   scripts/xgc_camera_apply_alignment
   scripts/xgc_camera_alignment
   scripts/xgc_camera_bag_export
+  scripts/xgc_camera_replay
   scripts/xgc_native_v4l2_rtp
   scripts/xgc_ros_image_rtp
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -63,6 +64,7 @@ if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
   if(NOT "$ENV{ROS_DISTRO}" STREQUAL "melodic")
     catkin_add_nosetests(test/test_4k_defaults.py)
+    catkin_add_nosetests(test/test_camera_replay.py)
     catkin_add_nosetests(test/test_camera_tools.py)
   endif()
   catkin_add_gtest(test_h264_input_buffer test/test_h264_input_buffer.cpp)

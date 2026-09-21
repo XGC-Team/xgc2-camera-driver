@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+# Replay camera provider: republishes a sealed replay asset (loop video or
+# still frame plus intrinsic/extrinsic YAML) under the exact topic/TF contract
+# of the physical 4K USB camera. Stamps are the current ROS time, which is the
+# simulation clock when /use_sim_time is true. Heavy dependencies (rospy, cv2)
+# are imported lazily so pure-python unit tests can load this module without
+# a ROS installation.
+from __future__ import print_function
+
+import argparse
+import math
+import os
+import signal
+import sys
+
+
+LOG_PREFIX = "xgc_camera_replay"
+INTRINSIC_SCHEMA = "xgc2.camera.intrinsic.v1"
+EXTRINSIC_SCHEMA = "xgc2.camera.extrinsic.v1"
+EXTRINSIC_FRAME_CONVENTION = "parent_T_camera_optical"
+# Standard ROS optical rotation (camera link -> optical frame), measured on the
+# physical camera bag as xyzw (-0.5, 0.5, -0.5, 0.5).
+STANDARD_LINK_TO_OPTICAL_QUATERNION = (-0.5, 0.5, -0.5, 0.5)
+OPTICAL_FRAME_SUFFIX = "_optical_frame"
+LINK_FRAME_SUFFIX = "_link"
+VIDEO_EXTENSIONS = (".mp4",)
+STILL_EXTENSIONS = (".png", ".jpg")
+
+
+class ReplayError(Exception):
+    """A rejected asset or failed step with an operator-readable message."""
+
+
+def _log(message):
+    sys.stderr.write("%s: %s\n" % (LOG_PREFIX, message))
+    sys.stderr.flush()
+
+
+# ---------------------------------------------------------------------------
+# Quaternion math (xyzw convention, no ROS dependency)
+# ---------------------------------------------------------------------------
+
+def quaternion_multiply(a, b):
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return (
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    )
+
+
+def quaternion_normalize(quaternion):
+    norm = math.sqrt(sum(component * component for component in quaternion))
+    if norm <= 0.0 or not math.isfinite(norm):
+        raise ReplayError("quaternion has no usable norm: %r" % (quaternion,))
+    return tuple(component / norm for component in quaternion)
+
+
+def quaternion_inverse(quaternion):
+    x, y, z, w = quaternion_normalize(quaternion)
+    return (-x, -y, -z, w)
+
+
+def derive_parent_to_link(
+    translation,
+    parent_to_optical_quaternion,
+    link_to_optical_quaternion=STANDARD_LINK_TO_OPTICAL_QUATERNION,
+):
+    # The extrinsic asset stores the composed parent->optical transform. The
+    # physical contract publishes parent->link and link->optical separately,
+    # where T_link_optical is the rotation-only standard optical rotation, so
+    # T_parent_link = T_parent_optical * inverse(T_link_optical). With a
+    # rotation-only T_link_optical the parent translation is unchanged.
+    quaternion = quaternion_multiply(
+        quaternion_normalize(parent_to_optical_quaternion),
+        quaternion_inverse(link_to_optical_quaternion),
+    )
+    return (
+        tuple(float(value) for value in translation),
+        quaternion_normalize(quaternion),
+    )
+
+
+def derive_link_frame(optical_frame):
+    if not optical_frame.endswith(OPTICAL_FRAME_SUFFIX) or optical_frame == OPTICAL_FRAME_SUFFIX:
+        raise ReplayError(
+            "extrinsic child_frame must end with %s: %r"
+            % (OPTICAL_FRAME_SUFFIX, optical_frame)
+        )
+    return optical_frame[: -len(OPTICAL_FRAME_SUFFIX)] + LINK_FRAME_SUFFIX
+
+
+# ---------------------------------------------------------------------------
+# Asset YAML loading and validation
+# ---------------------------------------------------------------------------
+
+def _load_yaml_document(path):
+    import yaml
+
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            document = yaml.safe_load(stream)
+    except OSError as error:
+        raise ReplayError("cannot read %s: %s" % (path, error))
+    except yaml.YAMLError as error:
+        raise ReplayError("invalid YAML in %s: %s" % (path, error))
+    if not isinstance(document, dict):
+        raise ReplayError("%s must be a YAML mapping" % path)
+    return document
+
+
+def _require_number(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ReplayError("%s must be a number" % label)
+    if not math.isfinite(float(value)):
+        raise ReplayError("%s must be finite" % label)
+    return float(value)
+
+
+def _require_positive_int(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ReplayError("%s must be a positive integer" % label)
+    return int(value)
+
+
+def _require_frame(value, label):
+    if not isinstance(value, str) or not value.strip():
+        raise ReplayError("%s must be a non-empty frame id" % label)
+    return value.strip()
+
+
+def _require_matrix(document, key, label, expected_rows, expected_cols=None):
+    matrix = document.get(key)
+    if not isinstance(matrix, dict):
+        raise ReplayError("%s %s must be a mapping" % (label, key))
+    rows = matrix.get("rows")
+    cols = matrix.get("cols")
+    data = matrix.get("data")
+    if rows != expected_rows:
+        raise ReplayError("%s %s.rows must be %d" % (label, key, expected_rows))
+    if expected_cols is not None and cols != expected_cols:
+        raise ReplayError("%s %s.cols must be %d" % (label, key, expected_cols))
+    if not isinstance(data, list) or not data:
+        raise ReplayError("%s %s.data must be a non-empty list" % (label, key))
+    if expected_cols is not None and len(data) != expected_rows * expected_cols:
+        raise ReplayError(
+            "%s %s.data must hold %d values" % (label, key, expected_rows * expected_cols)
+        )
+    if expected_cols is None and cols != len(data):
+        raise ReplayError("%s %s.cols must match data length" % (label, key))
+    return [_require_number(value, "%s %s.data" % (label, key)) for value in data]
+
+
+def load_intrinsic(path):
+    document = _load_yaml_document(path)
+    label = os.path.basename(path)
+    if document.get("schema") != INTRINSIC_SCHEMA:
+        raise ReplayError("%s schema must be %s" % (label, INTRINSIC_SCHEMA))
+    width = _require_positive_int(document.get("image_width"), "%s image_width" % label)
+    height = _require_positive_int(document.get("image_height"), "%s image_height" % label)
+    matrix = _require_matrix(document, "camera_matrix", label, 3, 3)
+    distortion_model = document.get("distortion_model")
+    if not isinstance(distortion_model, str) or not distortion_model:
+        raise ReplayError("%s distortion_model must be a non-empty string" % label)
+    coefficients = _require_matrix(document, "distortion_coefficients", label, 1)
+    return {
+        "width": width,
+        "height": height,
+        "camera_matrix": matrix,
+        "distortion_model": distortion_model,
+        "distortion_coefficients": coefficients,
+    }
+
+
+def build_camera_info_fields(intrinsic):
+    matrix = intrinsic["camera_matrix"]
+    return {
+        "width": intrinsic["width"],
+        "height": intrinsic["height"],
+        "distortion_model": intrinsic["distortion_model"],
+        "D": list(intrinsic["distortion_coefficients"]),
+        "K": list(matrix),
+        "R": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "P": [
+            matrix[0], 0.0, matrix[2], 0.0,
+            0.0, matrix[4], matrix[5], 0.0,
+            0.0, 0.0, 1.0, 0.0,
+        ],
+    }
+
+
+def load_extrinsic(path):
+    document = _load_yaml_document(path)
+    label = os.path.basename(path)
+    if document.get("schema") != EXTRINSIC_SCHEMA:
+        raise ReplayError("%s schema must be %s" % (label, EXTRINSIC_SCHEMA))
+    if document.get("frame_convention") != EXTRINSIC_FRAME_CONVENTION:
+        raise ReplayError(
+            "%s frame_convention must be %s" % (label, EXTRINSIC_FRAME_CONVENTION)
+        )
+    parent_frame = _require_frame(document.get("parent_frame"), "%s parent_frame" % label)
+    child_frame = _require_frame(document.get("child_frame"), "%s child_frame" % label)
+    translation = document.get("translation")
+    if not isinstance(translation, dict):
+        raise ReplayError("%s translation must be a mapping" % label)
+    translation = tuple(
+        _require_number(translation.get(axis), "%s translation.%s" % (label, axis))
+        for axis in ("x", "y", "z")
+    )
+    quaternion = document.get("quaternion_xyzw")
+    if not isinstance(quaternion, dict):
+        raise ReplayError("%s quaternion_xyzw must be a mapping" % label)
+    quaternion = quaternion_normalize(
+        tuple(
+            _require_number(quaternion.get(axis), "%s quaternion_xyzw.%s" % (label, axis))
+            for axis in ("x", "y", "z", "w")
+        )
+    )
+    return {
+        "parent_frame": parent_frame,
+        "child_frame": child_frame,
+        "translation": translation,
+        "quaternion": quaternion,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Media sources (cv2 is injected so tests can supply a fake)
+# ---------------------------------------------------------------------------
+
+class StillFrameSource(object):
+    def __init__(self, cv2, path):
+        self._frame = cv2.imread(path)
+        if self._frame is None:
+            raise ReplayError("cannot decode still frame: %s" % path)
+
+    def read(self):
+        return self._frame
+
+    def close(self):
+        pass
+
+
+class VideoLoopSource(object):
+    def __init__(self, cv2, path, loop):
+        self._cv2 = cv2
+        self._path = path
+        self._loop = loop
+        self._capture = self._open()
+
+    def _open(self):
+        capture = self._cv2.VideoCapture(self._path)
+        if not capture.isOpened():
+            raise ReplayError("cannot open video: %s" % self._path)
+        return capture
+
+    def read(self):
+        ok, frame = self._capture.read()
+        if ok and frame is not None:
+            return frame
+        if not self._loop:
+            return None
+        self._capture.release()
+        self._capture = self._open()
+        ok, frame = self._capture.read()
+        if not ok or frame is None:
+            raise ReplayError("video yields no decodable frame: %s" % self._path)
+        return frame
+
+    def close(self):
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
+
+
+def open_media_source(cv2, path, loop):
+    extension = os.path.splitext(path)[1].lower()
+    if extension in STILL_EXTENSIONS:
+        return StillFrameSource(cv2, path)
+    if extension in VIDEO_EXTENSIONS:
+        return VideoLoopSource(cv2, path, loop)
+    raise ReplayError(
+        "unsupported media extension %r (expected %s): %s"
+        % (extension, "/".join(VIDEO_EXTENSIONS + STILL_EXTENSIONS), path)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Argument handling
+# ---------------------------------------------------------------------------
+
+def split_ros_args(argv):
+    ros_args = [argument for argument in argv if ":=" in argument]
+    node_args = [argument for argument in argv if ":=" not in argument]
+    return ros_args, node_args
+
+
+def _rate_arg(value):
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("--rate must be a number, got %r" % value)
+    if not math.isfinite(rate) or rate <= 0.0:
+        raise argparse.ArgumentTypeError("--rate must be positive and finite, got %r" % value)
+    return rate
+
+
+def _jpeg_quality_arg(value):
+    try:
+        quality = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("--jpeg-quality must be an integer, got %r" % value)
+    if not 1 <= quality <= 100:
+        raise argparse.ArgumentTypeError("--jpeg-quality must be 1..100, got %r" % value)
+    return quality
+
+
+def _quaternion_arg(value):
+    parts = str(value).split(",")
+    if len(parts) != 4:
+        raise argparse.ArgumentTypeError(
+            "--link-to-optical-quaternion must be x,y,z,w, got %r" % value
+        )
+    try:
+        quaternion = tuple(float(part) for part in parts)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "--link-to-optical-quaternion must be numeric, got %r" % value
+        )
+    try:
+        quaternion_normalize(quaternion)
+    except ReplayError:
+        raise argparse.ArgumentTypeError(
+            "--link-to-optical-quaternion has no usable norm: %r" % value
+        )
+    return quaternion
+
+
+def _bool_arg(value):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError("expected true/false, got %r" % value)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Replay camera provider: republish a sealed replay asset "
+        "under the physical USB camera topic/TF contract with simulation-clock stamps."
+    )
+    parser.add_argument("--media-file", required=True)
+    parser.add_argument("--camera-info-file", required=True)
+    parser.add_argument("--extrinsic-file", required=True)
+    parser.add_argument("--rate", type=_rate_arg, default=30.0)
+    parser.add_argument("--loop", nargs="?", const=True, default=True, type=_bool_arg)
+    parser.add_argument("--no-loop", dest="loop", action="store_false")
+    parser.add_argument("--jpeg-quality", type=_jpeg_quality_arg, default=90)
+    parser.add_argument(
+        "--link-to-optical-quaternion",
+        type=_quaternion_arg,
+        default=STANDARD_LINK_TO_OPTICAL_QUATERNION,
+    )
+    parser.add_argument("--node-name", default="xgc_camera_replay")
+    parser.add_argument("--ros-master-uri", default="")
+    parser.add_argument("--ros-ip", default="")
+    parser.add_argument("--ros-hostname", default="")
+    parser.add_argument("--ros-log-dir", default="")
+    return parser
+
+
+def _require_file(path, label):
+    if not os.path.isfile(path):
+        raise ReplayError("%s does not exist: %s" % (label, path))
+
+
+# ---------------------------------------------------------------------------
+# ROS node (heavy imports stay inside this function)
+# ---------------------------------------------------------------------------
+
+def run_node(args):
+    import cv2
+    import rospy
+    import tf2_ros
+    from geometry_msgs.msg import TransformStamped
+    from sensor_msgs.msg import CameraInfo, CompressedImage
+
+    intrinsic = load_intrinsic(args.camera_info_file)
+    extrinsic = load_extrinsic(args.extrinsic_file)
+    optical_frame = extrinsic["child_frame"]
+    link_frame = derive_link_frame(optical_frame)
+    link_to_optical = quaternion_normalize(args.link_to_optical_quaternion)
+    parent_to_link_translation, parent_to_link_quaternion = derive_parent_to_link(
+        extrinsic["translation"], extrinsic["quaternion"], link_to_optical
+    )
+    source = open_media_source(cv2, args.media_file, args.loop)
+
+    if args.ros_master_uri:
+        os.environ["ROS_MASTER_URI"] = args.ros_master_uri
+    if args.ros_ip:
+        os.environ["ROS_IP"] = args.ros_ip
+    if args.ros_hostname:
+        os.environ["ROS_HOSTNAME"] = args.ros_hostname
+    if args.ros_log_dir:
+        os.environ["ROS_LOG_DIR"] = args.ros_log_dir
+
+    rospy.init_node(args.node_name, argv=[sys.argv[0]] + list(args.ros_args))
+
+    def _terminate(signum, _frame):
+        rospy.signal_shutdown("signal %d" % signum)
+
+    signal.signal(signal.SIGTERM, _terminate)
+
+    image_publisher = rospy.Publisher(
+        "image_raw/compressed", CompressedImage, queue_size=1
+    )
+    info_publisher = rospy.Publisher("camera_info", CameraInfo, queue_size=1)
+    broadcaster = tf2_ros.StaticTransformBroadcaster()
+
+    def _make_transform(child_frame, translation, quaternion, stamp):
+        transform = TransformStamped()
+        transform.header.stamp = stamp
+        transform.header.frame_id = extrinsic["parent_frame"]
+        transform.child_frame_id = child_frame
+        transform.transform.translation.x = translation[0]
+        transform.transform.translation.y = translation[1]
+        transform.transform.translation.z = translation[2]
+        transform.transform.rotation.x = quaternion[0]
+        transform.transform.rotation.y = quaternion[1]
+        transform.transform.rotation.z = quaternion[2]
+        transform.transform.rotation.w = quaternion[3]
+        return transform
+
+    tf_stamp = rospy.Time.now()
+    broadcaster.sendTransform(
+        [
+            _make_transform(
+                link_frame, parent_to_link_translation, parent_to_link_quaternion, tf_stamp
+            ),
+            _make_transform(optical_frame, (0.0, 0.0, 0.0), link_to_optical, tf_stamp),
+        ]
+    )
+
+    fields = build_camera_info_fields(intrinsic)
+    rate = rospy.Rate(args.rate)
+    quality_parameter = [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)]
+    _log(
+        "publishing %s -> %s loop=%s rate=%.3g source=%s"
+        % (extrinsic["parent_frame"], optical_frame, args.loop, args.rate, args.media_file)
+    )
+    try:
+        while not rospy.is_shutdown():
+            frame = source.read()
+            if frame is None:
+                _log("media exhausted, exiting (--no-loop)")
+                return 0
+            ok, encoded = cv2.imencode(".jpg", frame, quality_parameter)
+            if not ok:
+                raise ReplayError("JPEG encode failed for frame from %s" % args.media_file)
+            stamp = rospy.Time.now()
+
+            image = CompressedImage()
+            image.header.stamp = stamp
+            image.header.frame_id = optical_frame
+            image.format = "jpeg"
+            image.data = encoded.tobytes()
+
+            info = CameraInfo()
+            info.header.stamp = stamp
+            info.header.frame_id = optical_frame
+            info.width = fields["width"]
+            info.height = fields["height"]
+            info.distortion_model = fields["distortion_model"]
+            info.D = fields["D"]
+            info.K = fields["K"]
+            info.R = fields["R"]
+            info.P = fields["P"]
+
+            image_publisher.publish(image)
+            info_publisher.publish(info)
+            rate.sleep()
+    except rospy.ROSInterruptException:
+        return 0
+    finally:
+        source.close()
+    return 0
+
+
+def main(argv=None):
+    full_argv = list(sys.argv[1:] if argv is None else argv)
+    ros_args, node_args = split_ros_args(full_argv)
+    args = build_parser().parse_args(node_args)
+    args.ros_args = ros_args
+    try:
+        _require_file(args.media_file, "media file")
+        _require_file(args.camera_info_file, "camera info file")
+        _require_file(args.extrinsic_file, "extrinsic file")
+        return run_node(args)
+    except ReplayError as error:
+        _log(str(error))
+        return 1
+    except KeyboardInterrupt:
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
