@@ -92,6 +92,38 @@ def derive_link_frame(optical_frame):
     return optical_frame[: -len(OPTICAL_FRAME_SUFFIX)] + LINK_FRAME_SUFFIX
 
 
+def compose_static_camera_transforms(
+    extrinsic,
+    link_to_optical_quaternion=STANDARD_LINK_TO_OPTICAL_QUATERNION,
+):
+    # Physical USB publishes world -> usb_cam_link -> usb_cam_optical_frame on
+    # /tf_static. Replay must emit the same chain: parent->link carries the
+    # recording translation, and link->optical is the rotation-only optical
+    # offset. Publishing both children under world with a zero optical
+    # translation leaves CameraInfo.frame_id at the origin, so AR overlays
+    # cannot land on the historical pixels.
+    optical_frame = extrinsic["child_frame"]
+    link_frame = derive_link_frame(optical_frame)
+    link_to_optical = quaternion_normalize(link_to_optical_quaternion)
+    parent_to_link_translation, parent_to_link_quaternion = derive_parent_to_link(
+        extrinsic["translation"], extrinsic["quaternion"], link_to_optical
+    )
+    return (
+        {
+            "parent_frame": extrinsic["parent_frame"],
+            "child_frame": link_frame,
+            "translation": parent_to_link_translation,
+            "quaternion": parent_to_link_quaternion,
+        },
+        {
+            "parent_frame": link_frame,
+            "child_frame": optical_frame,
+            "translation": (0.0, 0.0, 0.0),
+            "quaternion": link_to_optical,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Asset YAML loading and validation
 # ---------------------------------------------------------------------------
@@ -393,10 +425,8 @@ def run_node(args):
     intrinsic = load_intrinsic(args.camera_info_file)
     extrinsic = load_extrinsic(args.extrinsic_file)
     optical_frame = extrinsic["child_frame"]
-    link_frame = derive_link_frame(optical_frame)
-    link_to_optical = quaternion_normalize(args.link_to_optical_quaternion)
-    parent_to_link_translation, parent_to_link_quaternion = derive_parent_to_link(
-        extrinsic["translation"], extrinsic["quaternion"], link_to_optical
+    parent_to_link, link_to_optical = compose_static_camera_transforms(
+        extrinsic, args.link_to_optical_quaternion
     )
     source = open_media_source(cv2, args.media_file, args.loop)
 
@@ -422,27 +452,25 @@ def run_node(args):
     info_publisher = rospy.Publisher("camera_info", CameraInfo, queue_size=1)
     broadcaster = tf2_ros.StaticTransformBroadcaster()
 
-    def _make_transform(child_frame, translation, quaternion, stamp):
+    def _make_transform(spec, stamp):
         transform = TransformStamped()
         transform.header.stamp = stamp
-        transform.header.frame_id = extrinsic["parent_frame"]
-        transform.child_frame_id = child_frame
-        transform.transform.translation.x = translation[0]
-        transform.transform.translation.y = translation[1]
-        transform.transform.translation.z = translation[2]
-        transform.transform.rotation.x = quaternion[0]
-        transform.transform.rotation.y = quaternion[1]
-        transform.transform.rotation.z = quaternion[2]
-        transform.transform.rotation.w = quaternion[3]
+        transform.header.frame_id = spec["parent_frame"]
+        transform.child_frame_id = spec["child_frame"]
+        transform.transform.translation.x = spec["translation"][0]
+        transform.transform.translation.y = spec["translation"][1]
+        transform.transform.translation.z = spec["translation"][2]
+        transform.transform.rotation.x = spec["quaternion"][0]
+        transform.transform.rotation.y = spec["quaternion"][1]
+        transform.transform.rotation.z = spec["quaternion"][2]
+        transform.transform.rotation.w = spec["quaternion"][3]
         return transform
 
     tf_stamp = rospy.Time.now()
     broadcaster.sendTransform(
         [
-            _make_transform(
-                link_frame, parent_to_link_translation, parent_to_link_quaternion, tf_stamp
-            ),
-            _make_transform(optical_frame, (0.0, 0.0, 0.0), link_to_optical, tf_stamp),
+            _make_transform(parent_to_link, tf_stamp),
+            _make_transform(link_to_optical, tf_stamp),
         ]
     )
 

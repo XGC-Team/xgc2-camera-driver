@@ -153,6 +153,32 @@ class ExtrinsicMathTest(unittest.TestCase):
         with self.assertRaises(replay.ReplayError):
             replay.derive_link_frame("_optical_frame")
 
+    def test_static_chain_matches_physical_usb_contract(self):
+        half = math.sqrt(0.5)
+        parent_to_optical = (0.0, 0.0, half, half)
+        translation = (2.798, 7.207, 1.906)
+        parent_to_link, link_to_optical = replay.compose_static_camera_transforms(
+            {
+                "parent_frame": "world",
+                "child_frame": "usb_cam_optical_frame",
+                "translation": translation,
+                "quaternion": parent_to_optical,
+            }
+        )
+        self.assertEqual(parent_to_link["parent_frame"], "world")
+        self.assertEqual(parent_to_link["child_frame"], "usb_cam_link")
+        self.assertEqual(parent_to_link["translation"], translation)
+        self.assertEqual(link_to_optical["parent_frame"], "usb_cam_link")
+        self.assertEqual(link_to_optical["child_frame"], "usb_cam_optical_frame")
+        self.assertEqual(link_to_optical["translation"], (0.0, 0.0, 0.0))
+        self.assertEqual(
+            link_to_optical["quaternion"], replay.STANDARD_LINK_TO_OPTICAL_QUATERNION
+        )
+        recomposed = replay.quaternion_multiply(
+            parent_to_link["quaternion"], link_to_optical["quaternion"]
+        )
+        self.assertQuaternionAlmostEqual(recomposed, parent_to_optical)
+
 
 class AssetYamlTest(unittest.TestCase):
     def setUp(self):
