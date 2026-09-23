@@ -41,9 +41,10 @@ roslaunch xgc2_camera_driver usb_camera_4k.launch \
 
 The lab USB default requests the LRCP imx415 `/dev/v4l/by-id` identity and its
 native-MJPEG 3840x2160 at 30 fps profile with the 110° lens. A lower measured
-delivery rate is runtime evidence, not a configured fallback. Recording, RViz compressed transport, and Lichtblick must consume
+delivery rate is runtime evidence, not a configured fallback. Recording and RViz compressed transport consume
 `/usb_cam/image_raw/compressed` without substituting a 1920x1080 or 1280x720
-capture. A different device or profile requires an explicit deployment change;
+capture; Lichtblick's 1920x1080 H.264 preview is derived downstream by the
+image RTP adapter, never by capturing at a lower resolution. A different device or profile requires an explicit deployment change;
 absence of the named camera is an error, not permission to fall back to another
 `/dev/video*` node or a lower resolution.
 
