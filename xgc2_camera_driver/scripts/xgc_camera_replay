@@ -259,27 +259,41 @@ def load_extrinsic(path):
 
 
 # ---------------------------------------------------------------------------
-# Media sources (cv2 is injected so tests can supply a fake)
+# Media sources (cv2 is injected so tests can supply a fake). read() returns
+# the JPEG bytes to publish, or None once a non-looping clip is exhausted.
 # ---------------------------------------------------------------------------
 
+def encode_jpeg(cv2, frame, jpeg_quality, path):
+    ok, encoded = cv2.imencode(
+        ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)]
+    )
+    if not ok:
+        raise ReplayError("JPEG encode failed for frame from %s" % path)
+    return encoded.tobytes()
+
+
 class StillFrameSource(object):
-    def __init__(self, cv2, path):
-        self._frame = cv2.imread(path)
-        if self._frame is None:
+    def __init__(self, cv2, path, jpeg_quality):
+        frame = cv2.imread(path)
+        if frame is None:
             raise ReplayError("cannot decode still frame: %s" % path)
+        # A still never changes. Encode it once: re-encoding the same 4K frame
+        # at the camera rate cost a CPU core for byte-identical output.
+        self._jpeg = encode_jpeg(cv2, frame, jpeg_quality, path)
 
     def read(self):
-        return self._frame
+        return self._jpeg
 
     def close(self):
         pass
 
 
 class VideoLoopSource(object):
-    def __init__(self, cv2, path, loop):
+    def __init__(self, cv2, path, loop, jpeg_quality):
         self._cv2 = cv2
         self._path = path
         self._loop = loop
+        self._jpeg_quality = jpeg_quality
         self._capture = self._open()
 
     def _open(self):
@@ -288,7 +302,7 @@ class VideoLoopSource(object):
             raise ReplayError("cannot open video: %s" % self._path)
         return capture
 
-    def read(self):
+    def _next_frame(self):
         ok, frame = self._capture.read()
         if ok and frame is not None:
             return frame
@@ -301,18 +315,24 @@ class VideoLoopSource(object):
             raise ReplayError("video yields no decodable frame: %s" % self._path)
         return frame
 
+    def read(self):
+        frame = self._next_frame()
+        if frame is None:
+            return None
+        return encode_jpeg(self._cv2, frame, self._jpeg_quality, self._path)
+
     def close(self):
         if self._capture is not None:
             self._capture.release()
             self._capture = None
 
 
-def open_media_source(cv2, path, loop):
+def open_media_source(cv2, path, loop, jpeg_quality):
     extension = os.path.splitext(path)[1].lower()
     if extension in STILL_EXTENSIONS:
-        return StillFrameSource(cv2, path)
+        return StillFrameSource(cv2, path, jpeg_quality)
     if extension in VIDEO_EXTENSIONS:
-        return VideoLoopSource(cv2, path, loop)
+        return VideoLoopSource(cv2, path, loop, jpeg_quality)
     raise ReplayError(
         "unsupported media extension %r (expected %s): %s"
         % (extension, "/".join(VIDEO_EXTENSIONS + STILL_EXTENSIONS), path)
@@ -428,7 +448,7 @@ def run_node(args):
     parent_to_link, link_to_optical = compose_static_camera_transforms(
         extrinsic, args.link_to_optical_quaternion
     )
-    source = open_media_source(cv2, args.media_file, args.loop)
+    source = open_media_source(cv2, args.media_file, args.loop, args.jpeg_quality)
 
     if args.ros_master_uri:
         os.environ["ROS_MASTER_URI"] = args.ros_master_uri
@@ -475,40 +495,34 @@ def run_node(args):
     )
 
     fields = build_camera_info_fields(intrinsic)
+    info = CameraInfo()
+    info.header.frame_id = optical_frame
+    info.width = fields["width"]
+    info.height = fields["height"]
+    info.distortion_model = fields["distortion_model"]
+    info.D = fields["D"]
+    info.K = fields["K"]
+    info.R = fields["R"]
+    info.P = fields["P"]
+    image = CompressedImage()
+    image.header.frame_id = optical_frame
+    image.format = "jpeg"
     rate = rospy.Rate(args.rate)
-    quality_parameter = [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)]
     _log(
         "publishing %s -> %s loop=%s rate=%.3g source=%s"
         % (extrinsic["parent_frame"], optical_frame, args.loop, args.rate, args.media_file)
     )
     try:
         while not rospy.is_shutdown():
-            frame = source.read()
-            if frame is None:
+            data = source.read()
+            if data is None:
                 _log("media exhausted, exiting (--no-loop)")
                 return 0
-            ok, encoded = cv2.imencode(".jpg", frame, quality_parameter)
-            if not ok:
-                raise ReplayError("JPEG encode failed for frame from %s" % args.media_file)
+            # Only the stamps change per frame; rospy serializes on publish.
             stamp = rospy.Time.now()
-
-            image = CompressedImage()
             image.header.stamp = stamp
-            image.header.frame_id = optical_frame
-            image.format = "jpeg"
-            image.data = encoded.tobytes()
-
-            info = CameraInfo()
+            image.data = data
             info.header.stamp = stamp
-            info.header.frame_id = optical_frame
-            info.width = fields["width"]
-            info.height = fields["height"]
-            info.distortion_model = fields["distortion_model"]
-            info.D = fields["D"]
-            info.K = fields["K"]
-            info.R = fields["R"]
-            info.P = fields["P"]
-
             image_publisher.publish(image)
             info_publisher.publish(info)
             rate.sleep()

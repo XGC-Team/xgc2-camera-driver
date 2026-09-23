@@ -88,16 +88,30 @@ class FakeCapture(object):
         self.released = True
 
 
+class FakeEncoded(object):
+    def __init__(self, data):
+        self._data = data
+
+    def tobytes(self):
+        return self._data
+
+
 class FakeCv2(types.ModuleType):
-    def __init__(self, still_frame=None, captures=None):
+    def __init__(self, still_frame=None, captures=None, encode_ok=True):
         super().__init__("cv2")
         self._still_frame = still_frame
         self._captures = list(captures or [])
+        self._encode_ok = encode_ok
         self.created_captures = []
+        self.encoded = []
         self.IMWRITE_JPEG_QUALITY = 1
 
     def imread(self, path):
         return self._still_frame
+
+    def imencode(self, extension, frame, parameters):
+        self.encoded.append((extension, frame, list(parameters)))
+        return self._encode_ok, FakeEncoded(("jpeg:%s" % (frame,)).encode("ascii"))
 
     def VideoCapture(self, path):
         capture = self._captures.pop(0)
@@ -264,50 +278,59 @@ class AssetYamlTest(unittest.TestCase):
 
 
 class MediaSourceTest(unittest.TestCase):
-    def test_still_frame_reads_forever(self):
-        frame = object()
-        cv2 = FakeCv2(still_frame=frame)
-        source = replay.open_media_source(cv2, "/asset/frame.png", loop=True)
-        self.assertIs(source.read(), frame)
-        self.assertIs(source.read(), frame)
+    def test_still_frame_is_encoded_once_and_republished(self):
+        cv2 = FakeCv2(still_frame="still")
+        source = replay.open_media_source(cv2, "/asset/frame.png", loop=True, jpeg_quality=90)
+        self.assertEqual(source.read(), b"jpeg:still")
+        for _ in range(100):
+            self.assertEqual(source.read(), b"jpeg:still")
+        self.assertEqual(cv2.encoded, [(".jpg", "still", [cv2.IMWRITE_JPEG_QUALITY, 90])])
 
     def test_still_frame_undecodable_is_rejected(self):
         cv2 = FakeCv2(still_frame=None)
         with self.assertRaises(replay.ReplayError):
-            replay.open_media_source(cv2, "/asset/frame.png", loop=True)
+            replay.open_media_source(cv2, "/asset/frame.png", loop=True, jpeg_quality=90)
+
+    def test_still_frame_encode_failure_is_rejected_at_startup(self):
+        cv2 = FakeCv2(still_frame="still", encode_ok=False)
+        with self.assertRaises(replay.ReplayError):
+            replay.open_media_source(cv2, "/asset/frame.png", loop=True, jpeg_quality=90)
 
     def test_video_reopens_at_end_when_looping(self):
         first = FakeCapture(frames=["f1", "f2"])
         second = FakeCapture(frames=["f3"])
         cv2 = FakeCv2(captures=[first, second])
-        source = replay.open_media_source(cv2, "/asset/media.mp4", loop=True)
-        self.assertEqual(source.read(), "f1")
-        self.assertEqual(source.read(), "f2")
-        self.assertEqual(source.read(), "f3")
+        source = replay.open_media_source(cv2, "/asset/media.mp4", loop=True, jpeg_quality=75)
+        self.assertEqual(source.read(), b"jpeg:f1")
+        self.assertEqual(source.read(), b"jpeg:f2")
+        self.assertEqual(source.read(), b"jpeg:f3")
         self.assertTrue(first.released)
         self.assertIs(cv2.created_captures[1], second)
+        # Every clip frame differs, so each one is encoded exactly once.
+        self.assertEqual([frame for _, frame, _ in cv2.encoded], ["f1", "f2", "f3"])
+        self.assertEqual(cv2.encoded[0][2], [cv2.IMWRITE_JPEG_QUALITY, 75])
 
     def test_video_no_loop_returns_none_at_end(self):
         capture = FakeCapture(frames=["f1"])
         cv2 = FakeCv2(captures=[capture])
-        source = replay.open_media_source(cv2, "/asset/media.mp4", loop=False)
-        self.assertEqual(source.read(), "f1")
+        source = replay.open_media_source(cv2, "/asset/media.mp4", loop=False, jpeg_quality=90)
+        self.assertEqual(source.read(), b"jpeg:f1")
         self.assertIsNone(source.read())
 
     def test_video_that_never_decodes_is_rejected(self):
         cv2 = FakeCv2(captures=[FakeCapture(frames=[]), FakeCapture(frames=[])])
-        source = replay.open_media_source(cv2, "/asset/media.mp4", loop=True)
+        source = replay.open_media_source(cv2, "/asset/media.mp4", loop=True, jpeg_quality=90)
         with self.assertRaises(replay.ReplayError):
             source.read()
 
     def test_unopenable_video_is_rejected(self):
         cv2 = FakeCv2(captures=[FakeCapture(frames=[], opened=False)])
         with self.assertRaises(replay.ReplayError):
-            replay.open_media_source(cv2, "/asset/media.mp4", loop=True)
+            replay.open_media_source(cv2, "/asset/media.mp4", loop=True, jpeg_quality=90)
 
     def test_unsupported_extension_is_rejected(self):
         with self.assertRaises(replay.ReplayError):
-            replay.open_media_source(FakeCv2(), "/asset/media.mkv", loop=True)
+            replay.open_media_source(FakeCv2(), "/asset/media.mkv", loop=True, jpeg_quality=90)
 
 
 class ArgumentValidationTest(unittest.TestCase):
