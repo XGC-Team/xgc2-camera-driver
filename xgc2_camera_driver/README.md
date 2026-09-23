@@ -48,11 +48,13 @@ while `/image_raw` has a subscriber. `always` retains legacy behavior and
 `never` guarantees that the capture process never pays raw decode cost.
 
 The shipped camera configuration currently uses `pixel_format: mjpeg`, so its
-native ROS/Lichtblick source is `/usb_cam/image_raw/compressed`; it does not
+native source-quality topic is `/usb_cam/image_raw/compressed`; it does not
 publish `/usb_cam/video`. A deployment that independently verifies native
-camera H.264 may switch to `/usb_cam/video`. Consumers must select the topic
-that matches the deployed source format—XGC does not decode and re-encode
-MJPEG into H.264 merely to make simulation and physical message types match.
+camera H.264 may switch to `/usb_cam/video`. Recording, calibration and
+source-quality exports consume the native topic. Live display does not: the
+separate `xgc2-ros-image-rtp-adapter` derives the WebRTC stream and the
+Lichtblick preview (`/usb_cam/video_h264`, 1920x1080) from it, so simulation
+and physical share one H.264 display path without this driver transcoding.
 
 ## Timestamp policy
 
