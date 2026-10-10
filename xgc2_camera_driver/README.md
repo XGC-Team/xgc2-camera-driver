@@ -9,52 +9,26 @@ physical camera path, not a configured fallback. RViz,
 Lichtblick, calibration snapshots, and scientific bags must retain those source
 dimensions; 1080p or 720p is not a successful fallback.
 
-## Media Edge (WebRTC)
-
-Live browser preview is **not** `ros_image_rtp_adapter` unless another
-process already owns the device. The native capture owner is:
-
-```bash
-rosrun xgc2_camera_driver xgc_native_v4l2_rtp \
-  --device /dev/video0 --pixel-format mjpeg \
-  --source-id camera --rtp-port 5004 \
-  --control-socket /tmp/xgc2/media/camera.sock
-```
-
-or `roslaunch xgc2_camera_driver native_v4l2_media.launch`. That process
-opens V4L2 once, encodes H264 once, and speaks the Media Edge control
-socket. Do not also start `xgc2_camera_driver_node` on the same device.
-
-`xgc_ros_image_rtp` / `ros_image_rtp.launch` is the last-resort ROS Image
-to H264/RTP encoder when native capture is already taken (for example
-`realsense2_camera` holds the USB device). Vehicles only pass topic, size,
-and RTP port.
-
 ## Topic contract
 
 For a node launched below namespace `/usb_cam`:
 
 | Topic | Type | Use |
 | --- | --- | --- |
-| `/usb_cam/video` | `foxglove_msgs/CompressedVideo` | Native Annex-B H.264, one access unit per message |
 | `/usb_cam/image_raw/compressed` | `sensor_msgs/CompressedImage` | Native MJPEG bytes |
 | `/usb_cam/camera_info` | `sensor_msgs/CameraInfo` | Intrinsics stamped with the encoded frame |
 | `/usb_cam/frame_timing` | `xgc_camera_msgs/FrameTiming` | Native source, dequeue, mapped ROS, epoch, drop, and keyframe timing |
 | `/usb_cam/stream_info` | `xgc_camera_msgs/StreamInfo` | Latched codec, geometry, clock-domain, and transport contract |
 | `/usb_cam/image_raw` | `sensor_msgs/Image` | Optional decoded image for local algorithms |
 
-`raw_publish_mode=on_demand` is the default. H.264 and MJPEG are decoded only
-while `/image_raw` has a subscriber. `always` retains legacy behavior and
-`never` guarantees that the capture process never pays raw decode cost.
+`raw_publish_mode=on_demand` is the default. MJPEG is decoded only while
+`/image_raw` has a subscriber. `always` publishes every frame and `never`
+guarantees that the capture process never pays raw decode cost.
 
-The shipped camera configuration currently uses `pixel_format: mjpeg`, so its
-native source-quality topic is `/usb_cam/image_raw/compressed`; it does not
-publish `/usb_cam/video`. A deployment that independently verifies native
-camera H.264 may switch to `/usb_cam/video`. Recording, calibration and
-source-quality exports consume the native topic. Live display does not: the
-separate `xgc2-ros-image-rtp-adapter` derives the WebRTC stream and the
-Lichtblick preview (`/usb_cam/video_h264`, 1920x1080) from it, so simulation
-and physical share one H.264 display path without this driver transcoding.
+The shipped camera configuration uses `pixel_format: mjpeg`, so its native
+source-quality topic is `/usb_cam/image_raw/compressed`. Native camera H.264
+capture is not supported. Recording, calibration and source-quality exports
+consume the native topic.
 
 ## Timestamp policy
 
@@ -78,33 +52,24 @@ When a calibration URL is supplied, its `image_width` and
 `image_height` must be exactly 3840x2160. A 1080p or 720p intrinsic file is
 rejected at startup instead of being relabeled as 4K CameraInfo.
 
-## H.264 recovery
-
-The ROS publisher uses a bounded queue. On a source sequence gap or queue
-overflow it drops dependent P frames until the next IDR, then prepends cached
-SPS/PPS when the camera omitted them. The decoder epoch changes at that
-boundary, allowing Lichtblick and offline consumers to reset deterministically.
-
 ## Offline derivatives and delay alignment
 
-The bag is the immutable scientific record. For a camera deployed in native
-H.264 mode, create a small, playable derivative without decoding or
-re-encoding:
+The bag is the immutable scientific record. For a recorded
+`foxglove_msgs/CompressedVideo` H.264 stream (for example the Gazebo world
+camera), create a small, playable derivative without decoding or re-encoding:
 
 ```bash
 rosrun xgc2_camera_driver xgc_camera_bag_export \
   /data/session/xgc*.bag \
-  --video-topic /usb_cam/video \
-  --timing-topic /usb_cam/frame_timing \
-  --stream-info-topic /usb_cam/stream_info \
-  --output /data/session/usb-camera.mkv
+  --video-topic /xgc/camera/world/video_h264 \
+  --timing-topic /xgc/camera/world/frame_timing \
+  --stream-info-topic /xgc/camera/world/stream_info \
+  --output /data/session/world-camera.mkv
 ```
 
-The command defaults target the Gazebo world camera
-(`/xgc/camera/world/video_h264`); pass the three USB H.264 topics as above only
-for a physical camera actually publishing `/usb_cam/video`. With the shipped
-MJPEG default, keep and replay `/usb_cam/image_raw/compressed` directly rather
-than manufacturing an H.264 derivative for interface symmetry.
+The command defaults target the Gazebo world camera. With the shipped MJPEG
+default, keep and replay `/usb_cam/image_raw/compressed` directly rather than
+manufacturing an H.264 derivative for interface symmetry.
 
 The exporter also writes an exact per-frame timing CSV and a provenance
 manifest with source/derivative SHA-256 hashes. Timing messages are indexed

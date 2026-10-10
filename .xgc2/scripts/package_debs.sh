@@ -106,8 +106,7 @@ build_driver() {
   find "${package_root}" -type d -exec chmod 0755 {} +
   find "${package_root}" -type f -exec chmod 0644 {} +
   chmod 0755 "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node"
-  for bin in xgc_native_v4l2_rtp xgc_ros_image_rtp \
-    xgc_camera_apply_alignment xgc_camera_alignment xgc_camera_bag_export
+  for bin in xgc_camera_apply_alignment xgc_camera_alignment xgc_camera_bag_export
   do
     if [[ -e "${package_root}${PREFIX}/lib/xgc2_camera_driver/${bin}" ]]; then
       chmod 0755 "${package_root}${PREFIX}/lib/xgc2_camera_driver/${bin}"

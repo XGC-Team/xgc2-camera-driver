@@ -4,9 +4,9 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <climits>
 #include <deque>
 #include <limits>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -16,17 +16,10 @@
 
 #include <unistd.h>
 
-extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavutil/error.h>
-#include <libswscale/swscale.h>
-}
-
 #include <camera_info_manager/camera_info_manager.h>
 #include <cv_bridge/cv_bridge.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_updater/diagnostic_updater.h>
-#include <foxglove_msgs/CompressedVideo.h>
 #include <image_transport/image_transport.h>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -43,8 +36,6 @@ extern "C" {
 
 #include "camera_info_contract.hpp"
 #include "clock_mapper.hpp"
-#include "h264_annex_b.hpp"
-#include "h264_input_buffer.hpp"
 
 namespace {
 
@@ -213,9 +204,10 @@ cv::Mat decodeToBgr(const Frame& frame)
       if (!frame.data() || frame.size() == 0U) {
         throw std::runtime_error("empty MJPEG frame");
       }
-      const int encoded_size =
-          xgc2_camera_driver::detail::checkedCompressedPayloadSize(
-              frame.size(), "MJPEG");
+      if (frame.size() > static_cast<std::size_t>(INT_MAX)) {
+        throw std::runtime_error("MJPEG frame is too large for the decoder");
+      }
+      const int encoded_size = static_cast<int>(frame.size());
       const cv::Mat encoded(
           1,
           encoded_size,
@@ -250,10 +242,8 @@ cv::Mat decodeToBgr(const Frame& frame)
           packedMat(frame, CV_8UC1, 1U), bgr, cv::COLOR_GRAY2BGR);
       break;
     case PixelFormat::H264:
-      throw std::logic_error(
-          "H264 must be decoded by the persistent stream decoder");
     case PixelFormat::Unknown:
-      throw std::runtime_error("camera returned an unknown pixel format");
+      throw std::runtime_error("camera returned an unsupported pixel format");
   }
   if (bgr.cols != static_cast<int>(frame.width()) ||
       bgr.rows != static_cast<int>(frame.height())) {
@@ -262,252 +252,6 @@ cv::Mat decodeToBgr(const Frame& frame)
   }
   return bgr;
 }
-
-std::string ffmpegError(const int code)
-{
-  char buffer[AV_ERROR_MAX_STRING_SIZE] = {};
-  av_strerror(code, buffer, sizeof(buffer));
-  return std::string(buffer);
-}
-
-struct SourceMetadata {
-  Timestamp timestamp;
-  TimestampReference timestamp_reference{TimestampReference::Unknown};
-  Timestamp dequeue_timestamp;
-  Mapping mapping;
-  std::uint64_t sequence{0};
-};
-
-struct DecodedFrame {
-  cv::Mat bgr;
-  SourceMetadata source;
-};
-
-class H264StreamDecoder {
- public:
-  H264StreamDecoder()
-  {
-    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    if (!codec) {
-      throw std::runtime_error("FFmpeg H264 decoder is unavailable");
-    }
-    parser_ = av_parser_init(codec->id);
-    context_ = avcodec_alloc_context3(codec);
-    frame_ = av_frame_alloc();
-    packet_ = av_packet_alloc();
-    if (!parser_ || !context_ || !frame_ || !packet_) {
-      throw std::runtime_error(
-          "could not allocate FFmpeg H264 decoder state");
-    }
-    context_->thread_count = 0;
-    context_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-    const int result = avcodec_open2(context_, codec, nullptr);
-    if (result < 0) {
-      throw std::runtime_error(
-          "could not open FFmpeg H264 decoder: " + ffmpegError(result));
-    }
-  }
-
-  ~H264StreamDecoder()
-  {
-    sws_freeContext(scaler_);
-    av_packet_free(&packet_);
-    av_frame_free(&frame_);
-    avcodec_free_context(&context_);
-    if (parser_) {
-      av_parser_close(parser_);
-    }
-  }
-
-  H264StreamDecoder(const H264StreamDecoder&) = delete;
-  H264StreamDecoder& operator=(const H264StreamDecoder&) = delete;
-
-  bool decode(
-      const Frame& input_frame,
-      const Mapping& input_mapping,
-      DecodedFrame* output)
-  {
-    SourceMetadata current{
-        input_frame.timestamp(),
-        input_frame.timestamp_reference(),
-        input_frame.dequeue_timestamp(),
-        input_mapping,
-        input_frame.sequence()};
-    metadata_[static_cast<std::int64_t>(current.sequence)] = current;
-    while (metadata_.size() > 512U) {
-      metadata_.erase(metadata_.begin());
-    }
-
-    const xgc2_camera_driver::detail::PaddedH264Input padded_input(
-        input_frame.data(), input_frame.size());
-    const std::uint8_t* input = padded_input.data();
-    int remaining = padded_input.payloadSize();
-    while (remaining > 0) {
-      std::uint8_t* packet_data = nullptr;
-      int packet_size = 0;
-      const int consumed = av_parser_parse2(
-          parser_,
-          context_,
-          &packet_data,
-          &packet_size,
-          input,
-          remaining,
-          static_cast<std::int64_t>(current.sequence),
-          static_cast<std::int64_t>(current.sequence),
-          0);
-      if (consumed < 0) {
-        throw std::runtime_error(
-            "FFmpeg could not parse H264 stream: " +
-            ffmpegError(consumed));
-      }
-      input += consumed;
-      remaining -= consumed;
-      if (packet_size > 0) {
-        sendPacket(packet_data, packet_size, current);
-      }
-      if (consumed == 0 && packet_size == 0) {
-        throw std::runtime_error(
-            "FFmpeg H264 parser made no progress");
-      }
-    }
-
-    if (decoded_.empty()) {
-      return false;
-    }
-    *output = std::move(decoded_.front());
-    decoded_.pop_front();
-    return true;
-  }
-
- private:
-  void sendPacket(
-      std::uint8_t* data,
-      const int size,
-      const SourceMetadata& current)
-  {
-    av_packet_unref(packet_);
-    packet_->data = data;
-    packet_->size = size;
-    packet_->pts =
-        parser_->pts == AV_NOPTS_VALUE
-            ? static_cast<std::int64_t>(current.sequence)
-            : parser_->pts;
-    packet_->dts =
-        parser_->dts == AV_NOPTS_VALUE ? packet_->pts : parser_->dts;
-    int result = avcodec_send_packet(context_, packet_);
-    if (result == AVERROR(EAGAIN)) {
-      drain(current);
-      result = avcodec_send_packet(context_, packet_);
-    }
-    if (result < 0) {
-      throw std::runtime_error(
-          "FFmpeg rejected H264 packet: " + ffmpegError(result));
-    }
-    drain(current);
-  }
-
-  void drain(const SourceMetadata& fallback)
-  {
-    for (;;) {
-      const int result = avcodec_receive_frame(context_, frame_);
-      if (result == AVERROR(EAGAIN) || result == AVERROR_EOF) {
-        return;
-      }
-      if (result < 0) {
-        throw std::runtime_error(
-            "FFmpeg failed to decode H264 frame: " +
-            ffmpegError(result));
-      }
-      if (frame_->width <= 0 || frame_->height <= 0) {
-        av_frame_unref(frame_);
-        throw std::runtime_error(
-            "FFmpeg decoded an H264 frame with invalid dimensions");
-      }
-
-      scaler_ = sws_getCachedContext(
-          scaler_,
-          frame_->width,
-          frame_->height,
-          static_cast<AVPixelFormat>(frame_->format),
-          frame_->width,
-          frame_->height,
-          AV_PIX_FMT_BGR24,
-          SWS_BILINEAR,
-          nullptr,
-          nullptr,
-          nullptr);
-      if (!scaler_) {
-        av_frame_unref(frame_);
-        throw std::runtime_error(
-            "FFmpeg could not create H264 color conversion context");
-      }
-      DecodedFrame decoded;
-      decoded.bgr.create(frame_->height, frame_->width, CV_8UC3);
-      std::uint8_t* output_data[] = {
-          decoded.bgr.data, nullptr, nullptr, nullptr};
-      int output_stride[] = {
-          static_cast<int>(decoded.bgr.step), 0, 0, 0};
-      sws_scale(
-          scaler_,
-          frame_->data,
-          frame_->linesize,
-          0,
-          frame_->height,
-          output_data,
-          output_stride);
-
-      const std::int64_t key =
-          frame_->best_effort_timestamp == AV_NOPTS_VALUE
-              ? (frame_->pts == AV_NOPTS_VALUE
-                     ? static_cast<std::int64_t>(fallback.sequence)
-                     : frame_->pts)
-              : frame_->best_effort_timestamp;
-      auto found = metadata_.find(key);
-      decoded.source =
-          found == metadata_.end() ? fallback : found->second;
-      if (found != metadata_.end()) {
-        metadata_.erase(found);
-      }
-      decoded_.push_back(std::move(decoded));
-      av_frame_unref(frame_);
-    }
-  }
-
-  AVCodecParserContext* parser_{nullptr};
-  AVCodecContext* context_{nullptr};
-  AVFrame* frame_{nullptr};
-  AVPacket* packet_{nullptr};
-  SwsContext* scaler_{nullptr};
-  std::map<std::int64_t, SourceMetadata> metadata_;
-  std::deque<DecodedFrame> decoded_;
-};
-
-class ImageDecoder {
- public:
-  bool decode(
-      const Frame& frame,
-      const Mapping& mapping,
-      DecodedFrame* decoded)
-  {
-    if (frame.pixel_format() == PixelFormat::H264) {
-      if (!h264_) {
-        h264_.reset(new H264StreamDecoder());
-      }
-      return h264_->decode(frame, mapping, decoded);
-    }
-    decoded->bgr = decodeToBgr(frame);
-    decoded->source = SourceMetadata{
-        frame.timestamp(),
-        frame.timestamp_reference(),
-        frame.dequeue_timestamp(),
-        mapping,
-        frame.sequence()};
-    return true;
-  }
-
- private:
-  std::unique_ptr<H264StreamDecoder> h264_;
-};
 
 cv::Mat convertOutput(const cv::Mat& bgr, const std::string& encoding)
 {
@@ -560,13 +304,7 @@ const char* toString(const RawPublishMode value)
   return "never";
 }
 
-enum class EncodedKind {
-  H264,
-  MJPEG,
-};
-
 struct EncodedPacket {
-  EncodedKind kind{EncodedKind::H264};
   std::vector<std::uint8_t> data;
   Mapping mapping;
   TimestampReference timestamp_reference{TimestampReference::Unknown};
@@ -577,7 +315,6 @@ struct EncodedPacket {
   std::uint32_t dropped_frames_before{0};
   std::uint8_t discontinuity{
       xgc_camera_msgs::FrameTiming::DISCONTINUITY_NONE};
-  bool keyframe{false};
 };
 
 class CameraDriverNode {
@@ -624,9 +361,6 @@ class CameraDriverNode {
     compressed_image_publisher_ =
         nh_.advertise<sensor_msgs::CompressedImage>(
             "image_raw/compressed", encoded_queue_capacity_);
-    compressed_video_publisher_ =
-        nh_.advertise<foxglove_msgs::CompressedVideo>(
-            "video", encoded_queue_capacity_);
     frame_timing_publisher_ =
         nh_.advertise<xgc_camera_msgs::FrameTiming>(
             "frame_timing", encoded_queue_capacity_);
@@ -762,7 +496,11 @@ class CameraDriverNode {
       camera_info_url_ = "file://" + camera_info_file_;
     }
     (void)xgc2::camera::backend_kind_from_string(backend_);
-    (void)xgc2::camera::pixel_format_from_string(pixel_format_);
+    if (xgc2::camera::pixel_format_from_string(pixel_format_) ==
+        PixelFormat::H264) {
+      throw std::invalid_argument(
+          "native H264 capture is not supported; use mjpeg or a raw format");
+    }
     (void)xgc2::camera::capture_mode_from_string(capture_mode_);
     (void)convertOutput(cv::Mat(1, 1, CV_8UC3), output_encoding_);
     raw_publish_mode_ = rawPublishModeFromString(raw_publish_mode);
@@ -801,9 +539,7 @@ class CameraDriverNode {
     }
     clearError();
 
-    const bool native_encoded =
-        (frame.pixel_format() == PixelFormat::H264 ||
-         frame.pixel_format() == PixelFormat::MJPEG);
+    const bool native_encoded = frame.pixel_format() == PixelFormat::MJPEG;
     if (publish_encoded_ && native_encoded) {
       handleEncodedFrame(frame, mapping);
     }
@@ -839,42 +575,32 @@ class CameraDriverNode {
     pending_discontinuity_ = reason;
   }
 
-  bool inspectContinuity(
+  void inspectContinuity(
       const Frame& frame,
       const Mapping& mapping,
       std::uint64_t* dropped)
   {
-    bool reset = false;
     if (have_stream_contract_ &&
         (mapping.effective_clock != last_effective_clock_ ||
          frame.timestamp_reference() != last_timestamp_reference_)) {
       beginEncodedEpoch(
           xgc_camera_msgs::FrameTiming::
               DISCONTINUITY_SOURCE_TIME_RESET);
-      reset = true;
     }
     if (have_source_sequence_) {
       if (frame.sequence() <= last_source_sequence_) {
         beginEncodedEpoch(
             xgc_camera_msgs::FrameTiming::
                 DISCONTINUITY_ENCODER_RESET);
-        reset = true;
       } else if (frame.sequence() > last_source_sequence_ + 1U) {
         *dropped +=
             frame.sequence() - last_source_sequence_ - 1U;
-        if (frame.pixel_format() == PixelFormat::H264) {
-          beginEncodedEpoch(
-              xgc_camera_msgs::FrameTiming::
-                  DISCONTINUITY_ENCODER_RESET);
-          reset = true;
-        }
       }
       if (frame.timestamp_ns() <= last_native_source_time_ns_ ||
           mapping.ros_time_ns <= last_mapped_source_time_ns_) {
         beginEncodedEpoch(
             xgc_camera_msgs::FrameTiming::
                 DISCONTINUITY_SOURCE_TIME_RESET);
-        reset = true;
       }
     }
     have_source_sequence_ = true;
@@ -884,7 +610,6 @@ class CameraDriverNode {
     have_stream_contract_ = true;
     last_effective_clock_ = mapping.effective_clock;
     last_timestamp_reference_ = frame.timestamp_reference();
-    return reset;
   }
 
   std::uint64_t clearOverflowedQueue()
@@ -903,17 +628,8 @@ class CameraDriverNode {
   {
     std::uint64_t dropped = pending_dropped_frames_;
     pending_dropped_frames_ = 0U;
-    const bool continuity_reset =
-        inspectContinuity(frame, mapping, &dropped);
-    const std::uint64_t queue_dropped = clearOverflowedQueue();
-    if (queue_dropped > 0U) {
-      dropped += queue_dropped;
-      if (frame.pixel_format() == PixelFormat::H264) {
-        beginEncodedEpoch(
-            xgc_camera_msgs::FrameTiming::
-                DISCONTINUITY_QUEUE_OVERFLOW);
-      }
-    }
+    inspectContinuity(frame, mapping, &dropped);
+    dropped += clearOverflowedQueue();
 
     EncodedPacket packet;
     packet.mapping = mapping;
@@ -926,49 +642,13 @@ class CameraDriverNode {
     packet.source_sequence = frame.sequence();
     packet.dropped_frames_before = saturatedFrameCount(dropped);
 
-    if (frame.pixel_format() == PixelFormat::H264) {
-      packet.kind = EncodedKind::H264;
-      if (continuity_reset || queue_dropped > 0U) {
-        h264_gate_.discontinuity();
-      }
-      xgc2_camera_driver::h264::AccessUnitInfo info;
-      if (!h264_gate_.prepare(
-              frame.data(), frame.size(), &packet.data, &info)) {
-        if (!info.annex_b) {
-          invalid_encoded_frame_count_.fetch_add(1U);
-          setError("native H264 frame is not an Annex-B access unit");
-          pending_dropped_frames_ =
-              static_cast<std::uint64_t>(
-                  packet.dropped_frames_before) +
-              1U;
-          h264_gate_.discontinuity();
-          beginEncodedEpoch(
-              xgc_camera_msgs::FrameTiming::
-                  DISCONTINUITY_ENCODER_RESET);
-        } else if (info.has_vcl) {
-          pending_dropped_frames_ =
-              static_cast<std::uint64_t>(
-                  packet.dropped_frames_before) +
-              1U;
-          encoded_waiting_for_idr_count_.fetch_add(1U);
-        } else {
-          pending_dropped_frames_ =
-              packet.dropped_frames_before;
-        }
-        return;
-      }
-      packet.keyframe = info.keyframe;
-    } else {
-      packet.kind = EncodedKind::MJPEG;
-      packet.keyframe = true;
-      if (!frame.data() || frame.size() < 2U ||
-          frame.data()[0] != 0xffU || frame.data()[1] != 0xd8U) {
-        invalid_encoded_frame_count_.fetch_add(1U);
-        setError("native MJPEG frame is not a JPEG bitstream");
-        return;
-      }
-      packet.data.assign(frame.data(), frame.data() + frame.size());
+    if (!frame.data() || frame.size() < 2U || frame.data()[0] != 0xffU ||
+        frame.data()[1] != 0xd8U) {
+      invalid_encoded_frame_count_.fetch_add(1U);
+      setError("native MJPEG frame is not a JPEG bitstream");
+      return;
     }
+    packet.data.assign(frame.data(), frame.data() + frame.size());
 
     if (encoded_epoch_ == 0U) {
       encoded_epoch_ = initialEpoch();
@@ -998,12 +678,6 @@ class CameraDriverNode {
         encoded_queue_drop_count_.fetch_add(
             encoded_queue_.size() + 1U);
         encoded_queue_.clear();
-        if (packet.kind == EncodedKind::H264) {
-          h264_gate_.discontinuity();
-          beginEncodedEpoch(
-              xgc_camera_msgs::FrameTiming::
-                  DISCONTINUITY_QUEUE_OVERFLOW);
-        }
         return;
       }
       encoded_queue_.push_back(std::move(packet));
@@ -1011,28 +685,12 @@ class CameraDriverNode {
     encoded_queue_ready_.notify_one();
   }
 
-  void publishRawFrame(
-      const Frame& frame,
-      const Mapping& input_mapping)
+  void publishRawFrame(const Frame& frame, const Mapping& mapping)
   {
-    DecodedFrame decoded;
-    if (!decoder_.decode(frame, input_mapping, &decoded)) {
-      return;
-    }
-    if (decoded.bgr.cols != static_cast<int>(width_) ||
-        decoded.bgr.rows != static_cast<int>(height_)) {
-      throw std::runtime_error(
-          "decoded image dimensions do not match negotiated dimensions");
-    }
-    const Mapping& mapping = decoded.source.mapping;
-    if (!mapping.valid) {
-      invalid_timestamp_count_.fetch_add(1U);
-      return;
-    }
-    const cv::Mat image = convertOutput(decoded.bgr, output_encoding_);
+    const cv::Mat image =
+        convertOutput(decodeToBgr(frame), output_encoding_);
     std_msgs::Header header;
-    header.seq =
-        static_cast<std::uint32_t>(decoded.source.sequence);
+    header.seq = static_cast<std::uint32_t>(frame.sequence());
     header.stamp = rosTimeFromNanoseconds(mapping.ros_time_ns);
     header.frame_id = frame_id_;
     sensor_msgs::ImagePtr image_message =
@@ -1040,7 +698,7 @@ class CameraDriverNode {
     raw_image_publisher_.publish(image_message);
     publishCameraInfo(header);
     raw_frame_count_.fetch_add(1U);
-    notePublished(decoded.source.sequence);
+    notePublished(frame.sequence());
   }
 
   void startPublisher()
@@ -1111,20 +769,11 @@ class CameraDriverNode {
       publishStreamInfo(packet);
       last_stream_info_epoch_ = packet.epoch;
     }
-    if (packet.kind == EncodedKind::H264) {
-      foxglove_msgs::CompressedVideo message;
-      message.timestamp = stamp;
-      message.frame_id = frame_id_;
-      message.format = "h264";
-      message.data = packet.data;
-      compressed_video_publisher_.publish(message);
-    } else {
-      sensor_msgs::CompressedImage message;
-      message.header = header;
-      message.format = "jpeg";
-      message.data = packet.data;
-      compressed_image_publisher_.publish(message);
-    }
+    sensor_msgs::CompressedImage message;
+    message.header = header;
+    message.format = "jpeg";
+    message.data = packet.data;
+    compressed_image_publisher_.publish(message);
     publishCameraInfo(header);
     publishFrameTiming(packet, stamp);
     encoded_frame_count_.fetch_add(1U);
@@ -1150,21 +799,11 @@ class CameraDriverNode {
     info.height = height_;
     info.nominal_frame_rate = framerate_;
     info.publisher_queue_capacity = encoded_queue_capacity_;
-    if (packet.kind == EncodedKind::H264) {
-      info.codec = xgc_camera_msgs::StreamInfo::CODEC_H264;
-      info.bitstream_format =
-          xgc_camera_msgs::StreamInfo::BITSTREAM_FORMAT_ANNEX_B;
-      info.transport_mask =
-          xgc_camera_msgs::StreamInfo::
-              TRANSPORT_ROS_COMPRESSED_VIDEO;
-    } else {
-      info.codec = xgc_camera_msgs::StreamInfo::CODEC_MJPEG;
-      info.bitstream_format =
-          xgc_camera_msgs::StreamInfo::BITSTREAM_FORMAT_JPEG;
-      info.transport_mask =
-          xgc_camera_msgs::StreamInfo::
-              TRANSPORT_ROS_COMPRESSED_IMAGE;
-    }
+    info.codec = xgc_camera_msgs::StreamInfo::CODEC_MJPEG;
+    info.bitstream_format =
+        xgc_camera_msgs::StreamInfo::BITSTREAM_FORMAT_JPEG;
+    info.transport_mask =
+        xgc_camera_msgs::StreamInfo::TRANSPORT_ROS_COMPRESSED_IMAGE;
     stream_info_publisher_.publish(info);
   }
 
@@ -1183,7 +822,7 @@ class CameraDriverNode {
     timing.frame_sequence = packet.frame_sequence;
     timing.source_sequence = packet.source_sequence;
     timing.rtp_timestamp = 0U;
-    timing.keyframe = packet.keyframe;
+    timing.keyframe = true;  // every JPEG is independently decodable
     timing.discontinuity = packet.discontinuity;
     timing.dropped_frames_before =
         packet.dropped_frames_before;
@@ -1311,9 +950,6 @@ class CameraDriverNode {
     status.add("published_encoded_bytes", encoded_bytes_count_.load());
     status.add("encoded_queue_drops", encoded_queue_drop_count_.load());
     status.add(
-        "encoded_frames_waiting_for_idr",
-        encoded_waiting_for_idr_count_.load());
-    status.add(
         "invalid_source_timestamps",
         invalid_timestamp_count_.load());
     status.add(
@@ -1350,15 +986,12 @@ class CameraDriverNode {
   image_transport::Publisher raw_image_publisher_;
   ros::Publisher camera_info_publisher_;
   ros::Publisher compressed_image_publisher_;
-  ros::Publisher compressed_video_publisher_;
   ros::Publisher frame_timing_publisher_;
   ros::Publisher stream_info_publisher_;
   std::unique_ptr<camera_info_manager::CameraInfoManager>
       camera_info_manager_;
   diagnostic_updater::Updater updater_;
   std::unique_ptr<xgc2::camera::Camera> camera_;
-  ImageDecoder decoder_;
-  xgc2_camera_driver::h264::AccessUnitGate h264_gate_;
 
   std::string backend_;
   std::string video_device_;
@@ -1413,7 +1046,6 @@ class CameraDriverNode {
   std::atomic<std::uint64_t> encoded_frame_count_{0};
   std::atomic<std::uint64_t> encoded_bytes_count_{0};
   std::atomic<std::uint64_t> encoded_queue_drop_count_{0};
-  std::atomic<std::uint64_t> encoded_waiting_for_idr_count_{0};
   std::atomic<std::uint64_t> invalid_timestamp_count_{0};
   std::atomic<std::uint64_t> invalid_encoded_frame_count_{0};
   std::atomic<std::uint64_t> raw_decode_error_count_{0};

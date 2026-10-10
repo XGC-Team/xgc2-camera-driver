@@ -9,12 +9,8 @@ source "${PREFIX}/setup.bash"
 dpkg -s "ros-${ROS_DISTRO}-xgc2-camera-driver" >/dev/null
 test "$(rospack find xgc2_camera_driver)" = "${PREFIX}/share/xgc2_camera_driver"
 test -x "${DRIVER}"
-test -x "${PREFIX}/lib/xgc2_camera_driver/xgc_native_v4l2_rtp"
-test -x "${PREFIX}/lib/xgc2_camera_driver/xgc_ros_image_rtp"
 roslaunch --files xgc2_camera_driver camera.launch >/dev/null
 roslaunch --files xgc2_camera_driver usb_camera_4k.launch >/dev/null
-roslaunch --files xgc2_camera_driver native_v4l2_media.launch >/dev/null
-roslaunch --files xgc2_camera_driver ros_image_rtp.launch >/dev/null
 if [[ "${ROS_DISTRO}" == "melodic" ]]; then
   test "$(rospack find foxglove_msgs)" = "${PREFIX}/share/foxglove_msgs"
 fi

@@ -1,13 +1,12 @@
 # XGC2 ROS1 Camera Driver
 
 Child of [`libxgc2-camera-dev`](https://github.com/XGC-Team/xgc2-camera-core).
-USB / V4L2 capture, native RTP, and ROS Image RTP live in this repository.
+USB / V4L2 capture and the ROS camera contract live in this repository.
 Robots assemble this package; they do not vendor a second V4L2 publisher.
 
 | Camera | Path | What lives there | Launch |
 | --- | --- | --- | --- |
 | Lab USB | `xgc2_camera_driver` | first-party V4L2 ROS driver | `usb_camera_4k.launch` (LRCP imx415 by-id, native MJPEG 3840x2160 at 30 fps, 110° lens) |
-| FS150 board camera | `xgc_native_v4l2_rtp` | first-party V4L2 RTP | `native_v4l2_media.launch` (`/dev/video8`, NV12) |
 | Scout D435 color | `xgc2_camera_driver` | first-party V4L2 ROS driver | robot `camera.launch` names the by-id node; do not launch `xgc2_camera_d435` |
 
 This product turns one fixed or general-purpose Linux camera into a supervised
@@ -43,8 +42,7 @@ The lab USB default requests the LRCP imx415 `/dev/v4l/by-id` identity and its
 native-MJPEG 3840x2160 at 30 fps profile with the 110° lens. A lower measured
 delivery rate is runtime evidence, not a configured fallback. Recording and RViz compressed transport consume
 `/usb_cam/image_raw/compressed` without substituting a 1920x1080 or 1280x720
-capture; Lichtblick's 1920x1080 H.264 preview is derived downstream by the
-image RTP adapter, never by capturing at a lower resolution. A different device or profile requires an explicit deployment change;
+capture. A different device or profile requires an explicit deployment change;
 absence of the named camera is an error, not permission to fall back to another
 `/dev/video*` node or a lower resolution.
 
@@ -71,7 +69,7 @@ That default is not a saved calibration.
 Main private parameters are `backend`, `video_device`, `width`, `height`,
 `framerate`, `pixel_format`, `capture_mode`, `buffer_count`,
 `capture_timeout_ms`, `output_encoding`, `camera_name`, `frame_id` and
-`camera_info_file`. Supported capture formats are MJPEG, H264, YUYV, UYVY,
+`camera_info_file`. Supported capture formats are MJPEG, YUYV, UYVY,
 RGB24, BGR24, NV12 and GREY. Output is `bgr8`, `rgb8` or `mono8`.
 
 For deterministic tests without camera hardware:

@@ -6,27 +6,23 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   diagnostic_msgs
   diagnostic_updater
-  foxglove_msgs
   image_transport
   roscpp
   sensor_msgs
   xgc_camera_msgs
 )
 find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
-find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil libswscale)
 find_package(xgc2_camera CONFIG REQUIRED)
 
 catkin_package(
-  CATKIN_DEPENDS camera_info_manager cv_bridge diagnostic_msgs diagnostic_updater foxglove_msgs image_transport roscpp sensor_msgs xgc_camera_msgs
+  CATKIN_DEPENDS camera_info_manager cv_bridge diagnostic_msgs diagnostic_updater image_transport roscpp sensor_msgs xgc_camera_msgs
   DEPENDS OpenCV
 )
 
 add_executable(xgc2_camera_driver_node
   src/camera_driver_node.cpp
   src/clock_mapper.cpp
-  src/h264_annex_b.cpp
 )
 add_dependencies(xgc2_camera_driver_node ${catkin_EXPORTED_TARGETS})
 target_compile_features(xgc2_camera_driver_node PRIVATE cxx_std_14)
@@ -35,7 +31,6 @@ target_link_libraries(xgc2_camera_driver_node
   PRIVATE
     ${catkin_LIBRARIES}
     ${OpenCV_LIBRARIES}
-    PkgConfig::FFMPEG
     Threads::Threads
     xgc2::camera
 )
@@ -54,9 +49,6 @@ catkin_install_python(PROGRAMS
   scripts/xgc_camera_apply_alignment
   scripts/xgc_camera_alignment
   scripts/xgc_camera_bag_export
-  scripts/xgc_camera_replay
-  scripts/xgc_native_v4l2_rtp
-  scripts/xgc_ros_image_rtp
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
@@ -64,13 +56,7 @@ if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
   if(NOT "$ENV{ROS_DISTRO}" STREQUAL "melodic")
     catkin_add_nosetests(test/test_4k_defaults.py)
-    catkin_add_nosetests(test/test_camera_replay.py)
     catkin_add_nosetests(test/test_camera_tools.py)
-  endif()
-  catkin_add_gtest(test_h264_input_buffer test/test_h264_input_buffer.cpp)
-  if(TARGET test_h264_input_buffer)
-    target_compile_features(test_h264_input_buffer PRIVATE cxx_std_14)
-    target_include_directories(test_h264_input_buffer PRIVATE src)
   endif()
   catkin_add_gtest(test_clock_mapper
     test/test_clock_mapper.cpp
@@ -85,14 +71,6 @@ if(CATKIN_ENABLE_TESTING)
   if(TARGET test_camera_info_contract)
     target_compile_features(test_camera_info_contract PRIVATE cxx_std_14)
     target_include_directories(test_camera_info_contract PRIVATE src)
-  endif()
-  catkin_add_gtest(test_h264_annex_b
-    test/test_h264_annex_b.cpp
-    src/h264_annex_b.cpp
-  )
-  if(TARGET test_h264_annex_b)
-    target_compile_features(test_h264_annex_b PRIVATE cxx_std_14)
-    target_include_directories(test_h264_annex_b PRIVATE src)
   endif()
   if(NOT "$ENV{ROS_DISTRO}" STREQUAL "melodic")
     add_rostest(test/synthetic_driver.test)
