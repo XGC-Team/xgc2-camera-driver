@@ -2,7 +2,7 @@
   <arg name="camera_ns" default="usb_cam" />
   <arg name="node_name" default="driver" />
   <arg name="config_file" default="$(find xgc2_camera_driver)/config/usb_cam.yaml" />
-  <arg name="backend" default="v4l2" />
+  <arg name="source_kind" default="v4l2" />
   <arg name="video_device" default="/dev/v4l/by-id/usb-LRCP_imx415_LRCP_imx415_01.00.00-video-index0" />
   <arg name="width" default="3840" />
   <arg name="height" default="2160" />
@@ -21,6 +21,9 @@
   <arg name="unknown_timestamp_clock" default="assume_monotonic" />
   <arg name="capture_timeout_ms" default="2000" />
   <arg name="synthetic_seed" default="1" />
+  <arg name="still_image" default="" />
+  <arg name="still_intrinsic_file" default="" />
+  <arg name="still_extrinsic_file" default="" />
   <arg name="respawn" default="false" />
 
   <group ns="$(arg camera_ns)">
@@ -30,7 +33,7 @@
           output="screen"
           respawn="$(arg respawn)">
       <rosparam command="load" file="$(arg config_file)" />
-      <param name="backend" value="$(arg backend)" />
+      <param name="source_kind" value="$(arg source_kind)" />
       <param name="video_device" value="$(arg video_device)" />
       <param name="width" value="$(arg width)" />
       <param name="height" value="$(arg height)" />
@@ -49,6 +52,9 @@
       <param name="unknown_timestamp_clock" value="$(arg unknown_timestamp_clock)" />
       <param name="capture_timeout_ms" value="$(arg capture_timeout_ms)" />
       <param name="synthetic_seed" value="$(arg synthetic_seed)" />
+      <param name="still_image" value="$(arg still_image)" />
+      <param name="still_intrinsic_file" value="$(arg still_intrinsic_file)" />
+      <param name="still_extrinsic_file" value="$(arg still_extrinsic_file)" />
     </node>
   </group>
 </launch>

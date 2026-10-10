@@ -66,17 +66,46 @@ publishes a default 110° plumb-bob pinhole (`D=0`) matching capture width/heigh
 so image and AR consumers still start; diagnostics still report uncalibrated.
 That default is not a saved calibration.
 
-Main private parameters are `backend`, `video_device`, `width`, `height`,
+Main private parameters are `source_kind`, `video_device`, `width`, `height`,
 `framerate`, `pixel_format`, `capture_mode`, `buffer_count`,
 `capture_timeout_ms`, `output_encoding`, `camera_name`, `frame_id` and
 `camera_info_file`. Supported capture formats are MJPEG, YUYV, UYVY,
 RGB24, BGR24, NV12 and GREY. Output is `bgr8`, `rgb8` or `mono8`.
 
+## Source kinds
+
+One node owns one camera source, selected by `source_kind`:
+
+| Kind | Source | Use |
+| --- | --- | --- |
+| `v4l2` (default) | a V4L2 device through camera-core | physical cameras |
+| `still` | a sealed scene image with its intrinsics and extrinsics | simulated scenes over real pixels |
+| `synthetic` | a generated moving test pattern delivered as real MJPEG | tests and measurements |
+
+`still` loads a `.png`, `.jpg` or `.jpeg` once (`still_image`), the matching
+`xgc2.camera.intrinsic.v1` file (`still_intrinsic_file`) and the
+`xgc2.camera.extrinsic.v1` file (`still_extrinsic_file`). A JPEG is published
+byte for byte; a PNG is converted once at `still_jpeg_quality`. The JPEG
+(`image_raw/compressed`), `camera_info` and `stream_info` are published once and
+latched, so every late subscriber receives them without the node resending a
+megabyte-sized picture at a camera rate. The static transform chain
+`<parent> -> <camera>_link -> <camera>_optical_frame` is published on
+`/tf_static` exactly like the physical camera contract. Image, CameraInfo and TF
+carry the current ROS time (the simulation clock when `/use_sim_time` is set);
+the node waits for a valid clock instead of stamping with zero. The frame id is
+the extrinsic's `child_frame`. A still publishes no `frame_timing` and no raw
+`image_raw`.
+
+`synthetic` renders `synthetic_frames` distinct test frames at startup
+(`synthetic_jpeg_quality`, `synthetic_noise_sigma`, `synthetic_seed`) and
+cycles them at `framerate` with monotonic source timestamps, so it exercises the
+same ROS contract as a V4L2 MJPEG camera.
+
 For deterministic tests without camera hardware:
 
 ```bash
 roslaunch xgc2_camera_driver camera.launch \
-  backend:=synthetic pixel_format:=bgr24 width:=320 height:=240 framerate:=10
+  source_kind:=synthetic width:=320 height:=240 framerate:=10
 ```
 
 ## Automation

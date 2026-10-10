@@ -1,0 +1,6 @@
+schema: xgc2.camera.extrinsic.v1
+frame_convention: parent_T_camera_optical
+parent_frame: world
+child_frame: usb_cam_optical_frame
+translation: {x: 1.0, y: 2.0, z: 3.0}
+quaternion_xyzw: {x: 0.0, y: 0.0, z: 0.7071067811865476, w: 0.7071067811865476}

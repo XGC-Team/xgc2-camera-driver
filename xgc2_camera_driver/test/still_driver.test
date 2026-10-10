@@ -1,0 +1,15 @@
+<launch>
+  <include file="$(find xgc2_camera_driver)/launch/camera.launch">
+    <arg name="camera_ns" value="still_camera" />
+    <arg name="source_kind" value="still" />
+    <arg name="camera_name" value="xgc2_still_ci" />
+    <arg name="still_image" value="$(find xgc2_camera_driver)/test/data/still_scene.png" />
+    <arg name="still_intrinsic_file" value="$(find xgc2_camera_driver)/test/data/still_intrinsic.yaml" />
+    <arg name="still_extrinsic_file" value="$(find xgc2_camera_driver)/test/data/still_extrinsic.yaml" />
+  </include>
+
+  <test test-name="still_camera_contract"
+        pkg="xgc2_camera_driver"
+        type="test_still_driver.py"
+        time-limit="40" />
+</launch>

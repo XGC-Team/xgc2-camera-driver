@@ -42,14 +42,14 @@ for _ in $(seq 1 50); do
 done
 rosparam list >/dev/null
 "${DRIVER}" __name:=driver __ns:=/usb_cam \
-  _backend:=synthetic _video_device:=synthetic:0 \
-  _width:=320 _height:=240 _framerate:=10 _pixel_format:=bgr24 \
+  _source_kind:=synthetic \
+  _width:=320 _height:=240 _framerate:=10 \
   _output_encoding:=bgr8 _frame_id:=usb_cam_optical_frame \
   >"${RUNTIME}/driver.log" 2>&1 &
 DRIVER_PID="$!"
-timeout 15 rostopic echo -n 1 /usb_cam/image_raw/header/stamp >"${RUNTIME}/stamp.yaml"
+timeout 15 rostopic echo -n 1 /usb_cam/image_raw/compressed/header/stamp >"${RUNTIME}/stamp.yaml"
 timeout 15 rostopic echo -n 1 /usb_cam/camera_info/header/stamp >/dev/null
-test "$(rostopic type /usb_cam/image_raw)" = "sensor_msgs/Image"
+test "$(rostopic type /usb_cam/image_raw/compressed)" = "sensor_msgs/CompressedImage"
 test "$(rostopic type /usb_cam/camera_info)" = "sensor_msgs/CameraInfo"
 grep -q '^secs:' "${RUNTIME}/stamp.yaml"
 

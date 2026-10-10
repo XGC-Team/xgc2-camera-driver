@@ -76,22 +76,22 @@ usage:
     sudo apt install ros-noetic-xgc2-camera-driver
 
     '
-  smoke_test: 'roslaunch xgc2_camera_driver camera.launch backend:=synthetic pixel_format:=bgr24
+  smoke_test: 'roslaunch xgc2_camera_driver camera.launch source_kind:=synthetic
 
     rostopic echo -n 1 /usb_cam/camera_info
 
     '
-  notes: 'One process owns one camera. Native H264 is forwarded without
+  notes: 'One process owns one camera. Native MJPEG is forwarded as
 
-    re-encoding as foxglove_msgs/CompressedVideo; native MJPEG is forwarded as
+    sensor_msgs/CompressedImage; a sealed still image is published once and
 
-    sensor_msgs/CompressedImage. Raw Image decoding is on-demand. FrameTiming,
+    latched. Raw Image decoding is on-demand. FrameTiming, StreamInfo,
 
-    StreamInfo, CameraInfo, and diagnostics preserve the scientific timing
+    CameraInfo, and diagnostics preserve the scientific timing contract.
 
-    contract. Calibration tools are released independently. Melodic has no
+    Calibration tools are released independently. Melodic has no archive
 
-    archive foxglove_msgs, so that interface is built with this package.
+    foxglove_msgs, so that interface is built with this package.
 
     '
 ownership:

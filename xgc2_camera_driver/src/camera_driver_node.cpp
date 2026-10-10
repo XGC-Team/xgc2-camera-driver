@@ -20,6 +20,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_updater/diagnostic_updater.h>
+#include <geometry_msgs/TransformStamped.h>
 #include <image_transport/image_transport.h>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -29,20 +30,24 @@
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
 #include <std_msgs/Header.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <xgc_camera_msgs/FrameTiming.h>
 #include <xgc_camera_msgs/StreamInfo.h>
 
 #include <xgc2/camera/camera.hpp>
 
 #include "camera_info_contract.hpp"
+#include "capture_source.hpp"
 #include "clock_mapper.hpp"
+#include "source_frame.hpp"
+#include "still_asset.hpp"
 
 namespace {
 
-using xgc2::camera::Frame;
 using xgc2::camera::PixelFormat;
 using xgc2::camera::Timestamp;
 using xgc2::camera::TimestampReference;
+using xgc2_camera_driver::SourceFrame;
 using xgc2_camera_driver::timing::Mapping;
 
 constexpr std::uint64_t kNanosecondsPerSecond = 1000000000ULL;
@@ -124,31 +129,31 @@ std::uint8_t streamClockDomain(
 }
 
 cv::Mat packedMat(
-    const Frame& frame,
+    const SourceFrame& frame,
     const int type,
     const std::size_t bytes_per_pixel)
 {
   const std::size_t minimum_row =
-      static_cast<std::size_t>(frame.width()) * bytes_per_pixel;
+      static_cast<std::size_t>(frame.width) * bytes_per_pixel;
   const std::size_t stride =
-      frame.stride() == 0 ? minimum_row : frame.stride();
-  const std::size_t required = stride * frame.height();
-  if (!frame.data() || stride < minimum_row || frame.size() < required) {
+      frame.stride == 0 ? minimum_row : frame.stride;
+  const std::size_t required = stride * frame.height;
+  if (!frame.data || stride < minimum_row || frame.size < required) {
     throw std::runtime_error(
         "camera frame has an invalid packed buffer layout");
   }
   return cv::Mat(
-      static_cast<int>(frame.height()),
-      static_cast<int>(frame.width()),
+      static_cast<int>(frame.height),
+      static_cast<int>(frame.width),
       type,
-      const_cast<std::uint8_t*>(frame.data()),
+      const_cast<std::uint8_t*>(frame.data),
       stride);
 }
 
-cv::Mat nv12Mat(const Frame& frame)
+cv::Mat nv12Mat(const SourceFrame& frame)
 {
-  const std::size_t width = frame.width();
-  const std::size_t height = frame.height();
+  const std::size_t width = frame.width;
+  const std::size_t height = frame.height;
   if ((width % 2U) != 0U || (height % 2U) != 0U) {
     throw std::runtime_error("NV12 width and height must be even");
   }
@@ -157,7 +162,7 @@ cv::Mat nv12Mat(const Frame& frame)
       static_cast<int>(height + height / 2U),
       static_cast<int>(width),
       CV_8UC1);
-  const auto& planes = frame.planes();
+  const auto& planes = frame.planes;
   if (planes.size() >= 2U) {
     const auto& y_plane = planes[0];
     const auto& uv_plane = planes[1];
@@ -188,31 +193,31 @@ cv::Mat nv12Mat(const Frame& frame)
   }
 
   const std::size_t required = width * height * 3U / 2U;
-  if (!frame.data() || frame.size() < required) {
+  if (!frame.data || frame.size < required) {
     throw std::runtime_error(
         "camera frame has an invalid contiguous NV12 layout");
   }
-  std::memcpy(packed.data, frame.data(), required);
+  std::memcpy(packed.data, frame.data, required);
   return packed;
 }
 
-cv::Mat decodeToBgr(const Frame& frame)
+cv::Mat decodeToBgr(const SourceFrame& frame)
 {
   cv::Mat bgr;
-  switch (frame.pixel_format()) {
+  switch (frame.pixel_format) {
     case PixelFormat::MJPEG: {
-      if (!frame.data() || frame.size() == 0U) {
+      if (!frame.data || frame.size == 0U) {
         throw std::runtime_error("empty MJPEG frame");
       }
-      if (frame.size() > static_cast<std::size_t>(INT_MAX)) {
+      if (frame.size > static_cast<std::size_t>(INT_MAX)) {
         throw std::runtime_error("MJPEG frame is too large for the decoder");
       }
-      const int encoded_size = static_cast<int>(frame.size());
+      const int encoded_size = static_cast<int>(frame.size);
       const cv::Mat encoded(
           1,
           encoded_size,
           CV_8UC1,
-          const_cast<std::uint8_t*>(frame.data()));
+          const_cast<std::uint8_t*>(frame.data));
       bgr = cv::imdecode(encoded, cv::IMREAD_COLOR);
       if (bgr.empty()) {
         throw std::runtime_error("OpenCV could not decode MJPEG frame");
@@ -245,8 +250,8 @@ cv::Mat decodeToBgr(const Frame& frame)
     case PixelFormat::Unknown:
       throw std::runtime_error("camera returned an unsupported pixel format");
   }
-  if (bgr.cols != static_cast<int>(frame.width()) ||
-      bgr.rows != static_cast<int>(frame.height())) {
+  if (bgr.cols != static_cast<int>(frame.width) ||
+      bgr.rows != static_cast<int>(frame.height)) {
     throw std::runtime_error(
         "decoded image dimensions do not match negotiated dimensions");
   }
@@ -317,6 +322,44 @@ struct EncodedPacket {
       xgc_camera_msgs::FrameTiming::DISCONTINUITY_NONE};
 };
 
+enum class SourceKind {
+  V4l2,
+  Still,
+  Synthetic,
+};
+
+SourceKind sourceKindFromString(const std::string& value)
+{
+  if (value == "v4l2") {
+    return SourceKind::V4l2;
+  }
+  if (value == "still") {
+    return SourceKind::Still;
+  }
+  if (value == "synthetic") {
+    return SourceKind::Synthetic;
+  }
+  throw std::invalid_argument("source_kind must be v4l2, still, or synthetic");
+}
+
+geometry_msgs::TransformStamped toTransformMessage(
+    const xgc2_camera_driver::StaticTransform& transform,
+    const ros::Time& stamp)
+{
+  geometry_msgs::TransformStamped message;
+  message.header.stamp = stamp;
+  message.header.frame_id = transform.parent_frame;
+  message.child_frame_id = transform.child_frame;
+  message.transform.translation.x = transform.translation[0];
+  message.transform.translation.y = transform.translation[1];
+  message.transform.translation.z = transform.translation[2];
+  message.transform.rotation.x = transform.quaternion[0];
+  message.transform.rotation.y = transform.quaternion[1];
+  message.transform.rotation.z = transform.quaternion[2];
+  message.transform.rotation.w = transform.quaternion[3];
+  return message;
+}
+
 class CameraDriverNode {
  public:
   CameraDriverNode()
@@ -326,84 +369,82 @@ class CameraDriverNode {
         start_wall_time_(ros::WallTime::now())
   {
     loadParameters();
-    camera_info_manager_.reset(new camera_info_manager::CameraInfoManager(
-        nh_, camera_name_, camera_info_url_));
+    const bool still = source_kind_ == SourceKind::Still;
+    if (still) {
+      openStill();
+    } else {
+      camera_info_manager_.reset(new camera_info_manager::CameraInfoManager(
+          nh_, camera_name_, camera_info_url_));
+      openCaptureSource();
+      const sensor_msgs::CameraInfo calibration =
+          camera_info_manager_->getCameraInfo();
+      xgc2_camera_driver::validateCalibrationGeometry(
+          camera_info_manager_->isCalibrated(),
+          calibration.width,
+          calibration.height,
+          width_,
+          height_);
+    }
 
-    xgc2::camera::CaptureConfig config;
-    config.backend = xgc2::camera::backend_kind_from_string(backend_);
-    config.device = video_device_;
-    config.width = width_;
-    config.height = height_;
-    config.frame_rate = framerate_;
-    config.pixel_format =
-        xgc2::camera::pixel_format_from_string(pixel_format_);
-    config.capture_mode =
-        xgc2::camera::capture_mode_from_string(capture_mode_);
-    config.buffer_count = buffer_count_;
-    config.synthetic_seed = synthetic_seed_;
-    camera_ = xgc2::camera::make_camera(config);
-    width_ = camera_->config().width;
-    height_ = camera_->config().height;
-    framerate_ = camera_->config().frame_rate;
-    native_pixel_format_ = camera_->config().pixel_format;
-    const sensor_msgs::CameraInfo calibration =
-        camera_info_manager_->getCameraInfo();
-    xgc2_camera_driver::validateCalibrationGeometry(
-        camera_info_manager_->isCalibrated(),
-        calibration.width,
-        calibration.height,
-        width_,
-        height_);
-
-    raw_image_publisher_ = image_transport_.advertise("image_raw", 1);
+    // A still image never changes: its JPEG, CameraInfo and stream description
+    // are published once and latched, so any late subscriber receives them
+    // without the node resending a megabyte-sized message at the camera rate.
+    if (!still) {
+      raw_image_publisher_ = image_transport_.advertise("image_raw", 1);
+      frame_timing_publisher_ =
+          nh_.advertise<xgc_camera_msgs::FrameTiming>(
+              "frame_timing", encoded_queue_capacity_);
+    }
     camera_info_publisher_ =
-        nh_.advertise<sensor_msgs::CameraInfo>("camera_info", 4);
+        nh_.advertise<sensor_msgs::CameraInfo>("camera_info", 4, still);
     compressed_image_publisher_ =
         nh_.advertise<sensor_msgs::CompressedImage>(
-            "image_raw/compressed", encoded_queue_capacity_);
-    frame_timing_publisher_ =
-        nh_.advertise<xgc_camera_msgs::FrameTiming>(
-            "frame_timing", encoded_queue_capacity_);
+            "image_raw/compressed", still ? 1U : encoded_queue_capacity_, still);
     stream_info_publisher_ =
         nh_.advertise<xgc_camera_msgs::StreamInfo>(
             "stream_info", 1, true);
 
     updater_.setHardwareID(
-        backend_ == "v4l2" ? video_device_ : "synthetic");
+        source_kind_ == SourceKind::V4l2
+            ? video_device_
+            : (still ? still_image_ : "synthetic"));
     updater_.add("camera stream", this, &CameraDriverNode::diagnose);
   }
 
   ~CameraDriverNode()
   {
-    if (camera_) {
-      camera_->stop();
+    if (source_) {
+      source_->stop();
     }
     stopPublisher();
   }
 
   int run()
   {
-    camera_->start();
+    ROS_INFO_STREAM(
+        "XGC2 camera started: source=" << source_kind_name_
+                                       << " device=" << video_device_
+                                       << " " << width_ << "x" << height_
+                                       << "@" << framerate_
+                                       << " format="
+                                       << xgc2::camera::to_string(
+                                              native_pixel_format_)
+                                       << " raw=" << toString(raw_publish_mode_)
+                                       << " encoded_queue="
+                                       << encoded_queue_capacity_
+                                       << " unknown_clock="
+                                       << xgc2_camera_driver::timing::toString(
+                                              unknown_clock_policy_));
+    if (source_kind_ == SourceKind::Still) {
+      return runStill();
+    }
+
+    source_->start();
     startPublisher();
     running_.store(true);
-    ROS_INFO_STREAM(
-        "XGC2 camera started: backend=" << backend_
-                                        << " device=" << video_device_
-                                        << " " << width_ << "x" << height_
-                                        << "@" << framerate_
-                                        << " format="
-                                        << xgc2::camera::to_string(
-                                               native_pixel_format_)
-                                        << " raw=" << toString(raw_publish_mode_)
-                                        << " encoded_queue="
-                                        << encoded_queue_capacity_
-                                        << " unknown_clock="
-                                        << xgc2_camera_driver::timing::toString(
-                                               unknown_clock_policy_));
-
     while (ros::ok()) {
       try {
-        const Frame frame = camera_->read(capture_timeout_ms_);
+        const SourceFrame frame = source_->read(capture_timeout_ms_);
         capture_packet_count_.fetch_add(1U);
         handleFrame(frame);
       } catch (const xgc2::camera::CameraError& error) {
@@ -417,7 +458,7 @@ class CameraDriverNode {
       updater_.update();
     }
     running_.store(false);
-    camera_->stop();
+    source_->stop();
     stopPublisher();
     return 0;
   }
@@ -429,10 +470,11 @@ class CameraDriverNode {
     int height = 2160;
     int buffer_count = 4;
     int synthetic_seed = 1;
+    int synthetic_frames = 30;
     int encoded_queue_capacity = 8;
     std::string raw_publish_mode;
     std::string unknown_timestamp_clock;
-    private_nh_.param<std::string>("backend", backend_, "v4l2");
+    private_nh_.param<std::string>("source_kind", source_kind_name_, "v4l2");
     private_nh_.param<std::string>(
         "video_device",
         video_device_,
@@ -456,6 +498,12 @@ class CameraDriverNode {
         "frame_id", frame_id_, "usb_cam_optical_frame");
     private_nh_.param<std::string>(
         "camera_info_file", camera_info_file_, "");
+    private_nh_.param<std::string>("still_image", still_image_, "");
+    private_nh_.param<std::string>(
+        "still_intrinsic_file", still_intrinsic_file_, "");
+    private_nh_.param<std::string>(
+        "still_extrinsic_file", still_extrinsic_file_, "");
+    private_nh_.param("still_jpeg_quality", still_jpeg_quality_, 95);
     private_nh_.param<std::string>(
         "raw_publish_mode", raw_publish_mode, "on_demand");
     private_nh_.param<std::string>(
@@ -471,8 +519,14 @@ class CameraDriverNode {
     private_nh_.param(
         "synthetic_seed", synthetic_seed, synthetic_seed);
     private_nh_.param(
+        "synthetic_jpeg_quality", synthetic_jpeg_quality_, 90);
+    private_nh_.param(
+        "synthetic_noise_sigma", synthetic_noise_sigma_, 3.0);
+    private_nh_.param("synthetic_frames", synthetic_frames, synthetic_frames);
+    private_nh_.param(
         "capture_timeout_ms", capture_timeout_ms_, 2000);
 
+    source_kind_ = sourceKindFromString(source_kind_name_);
     width_ = positiveDimension(width, "width");
     height_ = positiveDimension(height, "height");
     buffer_count_ = positiveDimension(buffer_count, "buffer_count");
@@ -483,6 +537,7 @@ class CameraDriverNode {
     }
     synthetic_seed_ = static_cast<std::uint32_t>(
         synthetic_seed < 0 ? 0 : synthetic_seed);
+    synthetic_frames_ = positiveDimension(synthetic_frames, "synthetic_frames");
     if (framerate_ <= 0.0 || capture_timeout_ms_ <= 0 ||
         stream_id_.empty() || frame_id_.empty()) {
       throw std::invalid_argument(
@@ -491,15 +546,32 @@ class CameraDriverNode {
     }
     camera_name_ = xgc2_camera_driver::validateStableCameraName(camera_name_);
     if (!camera_info_file_.empty()) {
+      if (source_kind_ == SourceKind::Still) {
+        throw std::invalid_argument(
+            "camera_info_file is not used with source_kind=still; the "
+            "intrinsics come from still_intrinsic_file");
+      }
       camera_info_file_ = xgc2_camera_driver::canonicalPhysicalCameraInfoFile(
           camera_info_file_, camera_name_);
       camera_info_url_ = "file://" + camera_info_file_;
     }
-    (void)xgc2::camera::backend_kind_from_string(backend_);
+    if (source_kind_ == SourceKind::Still &&
+        (still_image_.empty() || still_intrinsic_file_.empty() ||
+         still_extrinsic_file_.empty())) {
+      throw std::invalid_argument(
+          "source_kind=still requires still_image, still_intrinsic_file and "
+          "still_extrinsic_file");
+    }
     if (xgc2::camera::pixel_format_from_string(pixel_format_) ==
         PixelFormat::H264) {
       throw std::invalid_argument(
           "native H264 capture is not supported; use mjpeg or a raw format");
+    }
+    if (source_kind_ == SourceKind::Synthetic &&
+        xgc2::camera::pixel_format_from_string(pixel_format_) !=
+            PixelFormat::MJPEG) {
+      throw std::invalid_argument(
+          "the synthetic source delivers mjpeg; set pixel_format to mjpeg");
     }
     (void)xgc2::camera::capture_mode_from_string(capture_mode_);
     (void)convertOutput(cv::Mat(1, 1, CV_8UC3), output_encoding_);
@@ -507,6 +579,133 @@ class CameraDriverNode {
     unknown_clock_policy_ =
         xgc2_camera_driver::timing::unknownClockPolicyFromString(
             unknown_timestamp_clock);
+  }
+
+  void openCaptureSource()
+  {
+    if (source_kind_ == SourceKind::V4l2) {
+      xgc2::camera::CaptureConfig config;
+      config.backend = xgc2::camera::BackendKind::V4L2;
+      config.device = video_device_;
+      config.width = width_;
+      config.height = height_;
+      config.frame_rate = framerate_;
+      config.pixel_format =
+          xgc2::camera::pixel_format_from_string(pixel_format_);
+      config.capture_mode =
+          xgc2::camera::capture_mode_from_string(capture_mode_);
+      config.buffer_count = buffer_count_;
+      source_ = xgc2_camera_driver::makeV4l2Source(config);
+    } else {
+      xgc2_camera_driver::SyntheticConfig config;
+      config.width = width_;
+      config.height = height_;
+      config.frame_rate = framerate_;
+      config.seed = synthetic_seed_;
+      config.jpeg_quality = synthetic_jpeg_quality_;
+      config.noise_sigma = synthetic_noise_sigma_;
+      config.ring_frames = synthetic_frames_;
+      source_ = xgc2_camera_driver::makeSyntheticSource(config);
+    }
+    width_ = source_->width();
+    height_ = source_->height();
+    framerate_ = source_->frame_rate();
+    native_pixel_format_ = source_->pixel_format();
+  }
+
+  void openStill()
+  {
+    still_intrinsics_ = xgc2_camera_driver::loadIntrinsics(still_intrinsic_file_);
+    const xgc2_camera_driver::Extrinsic extrinsic =
+        xgc2_camera_driver::loadExtrinsic(still_extrinsic_file_);
+    still_transforms_ = xgc2_camera_driver::composeStaticCameraTransforms(extrinsic);
+    still_ = xgc2_camera_driver::loadStillImage(
+        still_image_, still_intrinsics_, still_jpeg_quality_);
+    // The optical frame of the sealed extrinsic is authoritative; a launch
+    // default for frame_id must not relabel the historical pixels.
+    frame_id_ = extrinsic.child_frame;
+    width_ = still_.width;
+    height_ = still_.height;
+    framerate_ = 0.0;
+    native_pixel_format_ = PixelFormat::MJPEG;
+    static_broadcaster_.reset(new tf2_ros::StaticTransformBroadcaster());
+  }
+
+  int runStill()
+  {
+    running_.store(true);
+    // The image, CameraInfo and TF carry the current ROS time, which is the
+    // simulation clock when /use_sim_time is set. Wait for that clock instead
+    // of stamping the only publication with zero.
+    while (ros::ok() && ros::Time::now().isZero()) {
+      ROS_INFO_STREAM_THROTTLE(5.0, "XGC2 camera still waiting for ROS time");
+      ros::WallDuration(0.1).sleep();
+    }
+    if (ros::ok()) {
+      publishStill();
+    }
+    while (ros::ok()) {
+      updater_.update();
+      ros::WallDuration(0.2).sleep();
+    }
+    running_.store(false);
+    return 0;
+  }
+
+  void publishStill()
+  {
+    const ros::Time stamp = ros::Time::now();
+    std_msgs::Header header;
+    header.stamp = stamp;
+    header.frame_id = frame_id_;
+
+    xgc_camera_msgs::StreamInfo info;
+    info.contract_version = xgc_camera_msgs::StreamInfo::CONTRACT_VERSION_CURRENT;
+    info.stream_id = stream_id_;
+    info.frame_id = frame_id_;
+    info.epoch = initialEpoch();
+    info.clock_domain = ros::Time::isSimTime()
+                            ? xgc_camera_msgs::StreamInfo::CLOCK_DOMAIN_SIMULATION
+                            : xgc_camera_msgs::StreamInfo::CLOCK_DOMAIN_SYSTEM_REALTIME;
+    info.timestamp_source = xgc_camera_msgs::StreamInfo::TIMESTAMP_SOURCE_DRIVER;
+    info.timestamp_reference =
+        xgc_camera_msgs::StreamInfo::TIMESTAMP_REFERENCE_UNKNOWN;
+    info.codec = xgc_camera_msgs::StreamInfo::CODEC_MJPEG;
+    info.bitstream_format = xgc_camera_msgs::StreamInfo::BITSTREAM_FORMAT_JPEG;
+    info.transport_mask =
+        xgc_camera_msgs::StreamInfo::TRANSPORT_ROS_COMPRESSED_IMAGE;
+    info.width = width_;
+    info.height = height_;
+    info.nominal_frame_rate = 0.0;
+    info.publisher_queue_capacity = 1U;
+    stream_info_publisher_.publish(info);
+
+    sensor_msgs::CameraInfo camera_info;
+    camera_info.header = header;
+    camera_info.width = still_intrinsics_.width;
+    camera_info.height = still_intrinsics_.height;
+    camera_info.distortion_model = still_intrinsics_.distortion_model;
+    camera_info.D = still_intrinsics_.distortion;
+    const auto& matrix = still_intrinsics_.camera_matrix;
+    std::copy(matrix.begin(), matrix.end(), camera_info.K.begin());
+    camera_info.R = {{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}};
+    camera_info.P = {{matrix[0], 0.0, matrix[2], 0.0, 0.0, matrix[4], matrix[5], 0.0,
+                      0.0, 0.0, 1.0, 0.0}};
+    camera_info_publisher_.publish(camera_info);
+
+    sensor_msgs::CompressedImage image;
+    image.header = header;
+    image.format = "jpeg";
+    image.data = still_.jpeg;
+    compressed_image_publisher_.publish(image);
+
+    static_broadcaster_->sendTransform(std::vector<geometry_msgs::TransformStamped>{
+        toTransformMessage(still_transforms_.parent_to_link, stamp),
+        toTransformMessage(still_transforms_.link_to_optical, stamp)});
+
+    encoded_frame_count_.fetch_add(1U);
+    encoded_bytes_count_.fetch_add(still_.jpeg.size());
+    notePublished(0U);
   }
 
   bool shouldPublishRaw() const
@@ -524,22 +723,22 @@ class CameraDriverNode {
         xgc2_camera_driver::timing::sampleHostClocks());
   }
 
-  void handleFrame(const Frame& frame)
+  void handleFrame(const SourceFrame& frame)
   {
-    const Mapping mapping = mapTimestamp(frame.timestamp());
+    const Mapping mapping = mapTimestamp(frame.timestamp);
     if (!mapping.valid) {
       invalid_timestamp_count_.fetch_add(1U);
       setError(
           std::string("source timestamp has no declared ROS time mapping "
                       "(clock=") +
-          xgc2::camera::to_string(frame.timestamp().clock) +
+          xgc2::camera::to_string(frame.timestamp.clock) +
           ", policy=" +
           xgc2_camera_driver::timing::toString(unknown_clock_policy_) + ")");
       return;
     }
     clearError();
 
-    const bool native_encoded = frame.pixel_format() == PixelFormat::MJPEG;
+    const bool native_encoded = frame.pixel_format == PixelFormat::MJPEG;
     if (publish_encoded_ && native_encoded) {
       handleEncodedFrame(frame, mapping);
     }
@@ -547,11 +746,11 @@ class CameraDriverNode {
     if (!native_encoded && !publish_raw &&
         camera_info_publisher_.getNumSubscribers() > 0U) {
       std_msgs::Header header;
-      header.seq = static_cast<std::uint32_t>(frame.sequence());
+      header.seq = static_cast<std::uint32_t>(frame.sequence);
       header.stamp = rosTimeFromNanoseconds(mapping.ros_time_ns);
       header.frame_id = frame_id_;
       publishCameraInfo(header);
-      notePublished(frame.sequence());
+      notePublished(frame.sequence);
     }
     if (publish_raw) {
       try {
@@ -576,25 +775,25 @@ class CameraDriverNode {
   }
 
   void inspectContinuity(
-      const Frame& frame,
+      const SourceFrame& frame,
       const Mapping& mapping,
       std::uint64_t* dropped)
   {
     if (have_stream_contract_ &&
         (mapping.effective_clock != last_effective_clock_ ||
-         frame.timestamp_reference() != last_timestamp_reference_)) {
+         frame.timestamp_reference != last_timestamp_reference_)) {
       beginEncodedEpoch(
           xgc_camera_msgs::FrameTiming::
               DISCONTINUITY_SOURCE_TIME_RESET);
     }
     if (have_source_sequence_) {
-      if (frame.sequence() <= last_source_sequence_) {
+      if (frame.sequence <= last_source_sequence_) {
         beginEncodedEpoch(
             xgc_camera_msgs::FrameTiming::
                 DISCONTINUITY_ENCODER_RESET);
-      } else if (frame.sequence() > last_source_sequence_ + 1U) {
+      } else if (frame.sequence > last_source_sequence_ + 1U) {
         *dropped +=
-            frame.sequence() - last_source_sequence_ - 1U;
+            frame.sequence - last_source_sequence_ - 1U;
       }
       if (frame.timestamp_ns() <= last_native_source_time_ns_ ||
           mapping.ros_time_ns <= last_mapped_source_time_ns_) {
@@ -604,12 +803,12 @@ class CameraDriverNode {
       }
     }
     have_source_sequence_ = true;
-    last_source_sequence_ = frame.sequence();
+    last_source_sequence_ = frame.sequence;
     last_native_source_time_ns_ = frame.timestamp_ns();
     last_mapped_source_time_ns_ = mapping.ros_time_ns;
     have_stream_contract_ = true;
     last_effective_clock_ = mapping.effective_clock;
-    last_timestamp_reference_ = frame.timestamp_reference();
+    last_timestamp_reference_ = frame.timestamp_reference;
   }
 
   std::uint64_t clearOverflowedQueue()
@@ -624,7 +823,7 @@ class CameraDriverNode {
     return dropped;
   }
 
-  void handleEncodedFrame(const Frame& frame, const Mapping& mapping)
+  void handleEncodedFrame(const SourceFrame& frame, const Mapping& mapping)
   {
     std::uint64_t dropped = pending_dropped_frames_;
     pending_dropped_frames_ = 0U;
@@ -633,22 +832,22 @@ class CameraDriverNode {
 
     EncodedPacket packet;
     packet.mapping = mapping;
-    packet.timestamp_reference = frame.timestamp_reference();
+    packet.timestamp_reference = frame.timestamp_reference;
     packet.dequeue_monotonic_ns =
-        frame.dequeue_timestamp().clock ==
+        frame.dequeue_timestamp.clock ==
                 xgc2::camera::TimestampClock::Monotonic
             ? frame.dequeue_timestamp_ns()
             : 0;
-    packet.source_sequence = frame.sequence();
+    packet.source_sequence = frame.sequence;
     packet.dropped_frames_before = saturatedFrameCount(dropped);
 
-    if (!frame.data() || frame.size() < 2U || frame.data()[0] != 0xffU ||
-        frame.data()[1] != 0xd8U) {
+    if (!frame.data || frame.size < 2U || frame.data[0] != 0xffU ||
+        frame.data[1] != 0xd8U) {
       invalid_encoded_frame_count_.fetch_add(1U);
       setError("native MJPEG frame is not a JPEG bitstream");
       return;
     }
-    packet.data.assign(frame.data(), frame.data() + frame.size());
+    packet.data.assign(frame.data, frame.data + frame.size);
 
     if (encoded_epoch_ == 0U) {
       encoded_epoch_ = initialEpoch();
@@ -685,12 +884,12 @@ class CameraDriverNode {
     encoded_queue_ready_.notify_one();
   }
 
-  void publishRawFrame(const Frame& frame, const Mapping& mapping)
+  void publishRawFrame(const SourceFrame& frame, const Mapping& mapping)
   {
     const cv::Mat image =
         convertOutput(decodeToBgr(frame), output_encoding_);
     std_msgs::Header header;
-    header.seq = static_cast<std::uint32_t>(frame.sequence());
+    header.seq = static_cast<std::uint32_t>(frame.sequence);
     header.stamp = rosTimeFromNanoseconds(mapping.ros_time_ns);
     header.frame_id = frame_id_;
     sensor_msgs::ImagePtr image_message =
@@ -698,7 +897,7 @@ class CameraDriverNode {
     raw_image_publisher_.publish(image_message);
     publishCameraInfo(header);
     raw_frame_count_.fetch_add(1U);
-    notePublished(frame.sequence());
+    notePublished(frame.sequence);
   }
 
   void startPublisher()
@@ -901,12 +1100,19 @@ class CameraDriverNode {
       error = last_error_;
     }
 
+    const bool still = source_kind_ == SourceKind::Still;
     const bool calibrated =
-        camera_info_manager_ && camera_info_manager_->isCalibrated();
+        still || (camera_info_manager_ && camera_info_manager_->isCalibrated());
     if (!running_.load()) {
       status.summary(
           diagnostic_msgs::DiagnosticStatus::ERROR,
           "camera is not running");
+    } else if (still) {
+      status.summary(
+          count == 0U ? diagnostic_msgs::DiagnosticStatus::WARN
+                      : diagnostic_msgs::DiagnosticStatus::OK,
+          count == 0U ? "waiting to publish the still image"
+                      : "still image published once and latched");
     } else if (!error.empty() ||
                age >
                    static_cast<double>(capture_timeout_ms_) * 2e-3) {
@@ -930,8 +1136,8 @@ class CameraDriverNode {
           diagnostic_msgs::DiagnosticStatus::OK,
           "camera is publishing");
     }
-    status.add("backend", backend_);
-    status.add("device", video_device_);
+    status.add("source_kind", source_kind_name_);
+    status.add("device", still ? still_image_ : video_device_);
     status.add(
         "pixel_format",
         xgc2::camera::to_string(native_pixel_format_));
@@ -991,9 +1197,11 @@ class CameraDriverNode {
   std::unique_ptr<camera_info_manager::CameraInfoManager>
       camera_info_manager_;
   diagnostic_updater::Updater updater_;
-  std::unique_ptr<xgc2::camera::Camera> camera_;
+  std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_;
+  std::unique_ptr<xgc2_camera_driver::CaptureSource> source_;
 
-  std::string backend_;
+  SourceKind source_kind_{SourceKind::V4l2};
+  std::string source_kind_name_;
   std::string video_device_;
   std::string pixel_format_;
   std::string capture_mode_;
@@ -1003,6 +1211,16 @@ class CameraDriverNode {
   std::string frame_id_;
   std::string camera_info_file_;
   std::string camera_info_url_;
+  std::string still_image_;
+  std::string still_intrinsic_file_;
+  std::string still_extrinsic_file_;
+  int still_jpeg_quality_{95};
+  xgc2_camera_driver::Intrinsics still_intrinsics_;
+  xgc2_camera_driver::CameraStaticTransforms still_transforms_;
+  xgc2_camera_driver::StillImage still_;
+  int synthetic_jpeg_quality_{90};
+  double synthetic_noise_sigma_{3.0};
+  std::uint32_t synthetic_frames_{30};
   PixelFormat native_pixel_format_{PixelFormat::Unknown};
   RawPublishMode raw_publish_mode_{RawPublishMode::OnDemand};
   xgc2_camera_driver::timing::UnknownClockPolicy
@@ -1066,14 +1284,14 @@ int main(int argc, char** argv)
   spinner.start();
 
   ros::NodeHandle private_nh("~");
-  std::string backend;
-  private_nh.param<std::string>("backend", backend, "v4l2");
+  std::string source_kind;
+  private_nh.param<std::string>("source_kind", source_kind, "v4l2");
   while (ros::ok()) {
     try {
       CameraDriverNode node;
       return node.run();
     } catch (const xgc2::camera::CameraError& error) {
-      if (backend != "v4l2") {
+      if (source_kind != "v4l2") {
         ROS_FATAL_STREAM(
             "XGC2 camera driver failed: " << error.what());
         return 1;
