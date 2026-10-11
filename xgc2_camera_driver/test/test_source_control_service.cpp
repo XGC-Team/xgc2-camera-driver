@@ -295,7 +295,8 @@ TEST(SourceControlService, DiscoveryIsTheOnlyUnfencedRoute)
   // own identity, which the client refuses to accept as the pinned owner.
   Client stale(fixture.socket(), "0123456789abcdef0123456789abcdef");
   EXPECT_THROW(stale.get(kSource + "/status"), xrpc::HttpCallError);
-  EXPECT_THROW(stale.get("/v1/describe?wait_ready_ms=0"), xrpc::HttpCallError);
+  // Discovery matches the path, including readiness queries without a fence.
+  EXPECT_EQ(plain.get("/v1/describe?wait_ready_ms=0").status, 200);
   Client fenced = fixture.discover();
   EXPECT_EQ(fenced.get(kSource + "/status").status, 200);
 }
@@ -303,7 +304,7 @@ TEST(SourceControlService, DiscoveryIsTheOnlyUnfencedRoute)
 TEST(SourceControlService, ReadinessIsHeldWithoutPollingAndNeverFaked)
 {
   Fixture fixture("synthetic", false);
-  Client client = fixture.discover();
+  Client client(fixture.socket(), "");
 
   // A bounded wait on a source that never opens ends with the current answer.
   const auto before = std::chrono::steady_clock::now();

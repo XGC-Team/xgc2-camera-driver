@@ -49,7 +49,7 @@ for the single source `source_id` (default: the camera name).
 | Route | Behaviour |
 | --- | --- |
 | `GET /v1/describe` | service discovery (unfenced): `service`, `api_version`, `instance_id`, `ready`, `facts`, `service_ref`, `sources` |
-| `GET /v1/describe?wait_ready_ms=N` | holds the call, without polling, until the source is open and has captured a picture or `N` ms (at most 30000) pass |
+| `GET /v1/describe?wait_ready_ms=N` | unfenced discovery; holds the call, without polling, until the source is open and has captured a picture or `N` ms (at most 30000) pass |
 | `GET .../describe` | descriptor: H264, payload 96, 90 kHz, destination, geometry, `fps` (for a still, `still_fps`), `frameId`, capabilities, force-IDR |
 | `GET .../status` | `idle`, `starting`, `active`, `stopping` or `faulted`, desired/applied active, revisions, native counters |
 | `POST .../start`, `.../stop` | applied receipts: `start` completes when the first access unit has been sent; both are idempotent; `start` of a source that is not ready fails |
