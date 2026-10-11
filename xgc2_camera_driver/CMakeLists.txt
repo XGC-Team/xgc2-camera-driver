@@ -18,6 +18,20 @@ find_package(Threads REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(xgc2_camera CONFIG REQUIRED)
 
+# The H.264/RTP media outputs need FFmpeg and the XRPC http.v1 server, which
+# exists for Ubuntu 20.04 and newer. Older robots keep the ROS-only camera.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+  pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET libavcodec libavutil libswscale)
+endif()
+find_package(XgcXrpc QUIET COMPONENTS http json_http)
+if(FFMPEG_FOUND AND XgcXrpc_FOUND)
+  set(XGC2_CAMERA_MEDIA TRUE)
+else()
+  set(XGC2_CAMERA_MEDIA FALSE)
+  message(STATUS "xgc2_camera_driver: media outputs disabled (FFmpeg and XgcXrpc http/json_http are required)")
+endif()
+
 catkin_package(
   CATKIN_DEPENDS camera_info_manager cv_bridge diagnostic_msgs diagnostic_updater geometry_msgs image_transport roscpp sensor_msgs tf2_ros xgc_camera_msgs
   DEPENDS OpenCV
@@ -90,6 +104,28 @@ if(CATKIN_ENABLE_TESTING)
     target_compile_features(test_capture_source PRIVATE cxx_std_14)
     target_include_directories(test_capture_source PRIVATE src ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(test_capture_source ${OpenCV_LIBRARIES} xgc2::camera)
+  endif()
+  if(XGC2_CAMERA_MEDIA)
+    catkin_add_gtest(test_h264_encoder
+      test/test_h264_encoder.cpp
+      src/h264_decoder.cpp
+      src/h264_encoder.cpp
+      src/jpeg_decoder.cpp
+    )
+    if(TARGET test_h264_encoder)
+      target_compile_features(test_h264_encoder PRIVATE cxx_std_14)
+      target_include_directories(test_h264_encoder PRIVATE src test ${OpenCV_INCLUDE_DIRS})
+      target_link_libraries(test_h264_encoder PkgConfig::FFMPEG ${OpenCV_LIBRARIES})
+    endif()
+    catkin_add_gtest(test_rtp_h264
+      test/test_rtp_h264.cpp
+      src/rtp_h264.cpp
+    )
+    if(TARGET test_rtp_h264)
+      target_compile_features(test_rtp_h264 PRIVATE cxx_std_14)
+      target_include_directories(test_rtp_h264 PRIVATE src)
+      target_link_libraries(test_rtp_h264 Threads::Threads)
+    endif()
   endif()
   catkin_add_gtest(test_camera_info_contract test/test_camera_info_contract.cpp)
   if(TARGET test_camera_info_contract)
