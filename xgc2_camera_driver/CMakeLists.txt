@@ -77,7 +77,16 @@ target_link_libraries(xgc2_camera_driver_node
 )
 target_include_directories(xgc2_camera_driver_node PRIVATE ${catkin_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} ${YAML_CPP_INCLUDE_DIR})
 
-install(TARGETS xgc2_camera_driver_node
+# Reads a sensor_msgs/Image topic into a pipe for an encoder pipeline. It needs
+# only roscpp and builds as C++14, so Melodic robots can use it.
+add_executable(xgc2_ros_image_pipe src/ros_image_pipe.cpp)
+add_dependencies(xgc2_ros_image_pipe ${catkin_EXPORTED_TARGETS})
+target_compile_features(xgc2_ros_image_pipe PRIVATE cxx_std_14)
+target_compile_options(xgc2_ros_image_pipe PRIVATE -Wall -Wextra -Wpedantic)
+target_include_directories(xgc2_ros_image_pipe PRIVATE ${catkin_INCLUDE_DIRS})
+target_link_libraries(xgc2_ros_image_pipe PRIVATE ${catkin_LIBRARIES})
+
+install(TARGETS xgc2_camera_driver_node xgc2_ros_image_pipe
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(DIRECTORY launch config
@@ -177,6 +186,11 @@ if(CATKIN_ENABLE_TESTING)
       target_link_libraries(test_rtp_h264 Threads::Threads)
     endif()
   endif()
+  catkin_add_gtest(test_image_pipe test/test_image_pipe.cpp)
+  if(TARGET test_image_pipe)
+    target_compile_features(test_image_pipe PRIVATE cxx_std_14)
+    target_include_directories(test_image_pipe PRIVATE src)
+  endif()
   catkin_add_gtest(test_camera_info_contract test/test_camera_info_contract.cpp)
   if(TARGET test_camera_info_contract)
     target_compile_features(test_camera_info_contract PRIVATE cxx_std_14)
@@ -185,6 +199,7 @@ if(CATKIN_ENABLE_TESTING)
   if(NOT "$ENV{ROS_DISTRO}" STREQUAL "melodic")
     add_rostest(test/synthetic_driver.test)
     add_rostest(test/still_driver.test)
+    add_rostest(test/image_pipe.test)
     if(XGC2_CAMERA_MEDIA)
       add_rostest(test/media_driver.test)
     endif()

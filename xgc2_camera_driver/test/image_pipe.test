@@ -1,0 +1,6 @@
+<launch>
+  <test test-name="image_pipe_contract"
+        pkg="xgc2_camera_driver"
+        type="test_image_pipe.py"
+        time-limit="120" />
+</launch>

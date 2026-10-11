@@ -64,6 +64,29 @@ service stays up with its socket and instance identity and reports
 travels with a capture (`calibrationState: available`); an uncalibrated camera
 reports `unavailable` and the node never invents intrinsics.
 
+## ROS image pipe
+
+`xgc2_ros_image_pipe` is a small roscpp tool for robots whose camera is already
+owned by a ROS driver (for example the Scout's D435 colour stream) but whose
+H.264 encoder lives in a media-edge pipeline: it subscribes a `sensor_msgs/Image`
+topic and writes each image to standard output as a raw frame, and exits when
+the reader closes the pipe.
+
+```bash
+rosrun xgc2_camera_driver xgc2_ros_image_pipe \
+  --topic /d435/image_raw --format bgr8 --width 640 --height 480 --max-fps 30
+```
+
+`--format` is `bgr8` (default), `rgb8` or `mono8`; `bgr8`, `rgb8`, `bgra8`,
+`rgba8`, `mono8` and the 16-bit depth encodings are converted (depth is scaled
+so that `--depth-max` millimetres is white), row padding is removed. With
+`--width/--height` an image of another size is fatal (exit 1); `--max-fps` drops
+surplus frames. Standard output carries frames only: logs go to standard error,
+and anything else that writes to standard output is moved there. A slow reader
+throttles the tool, which keeps just the newest image (queue of one). It needs
+only roscpp and `sensor_msgs`, builds as C++14 and is part of the Melodic
+package.
+
 ## Topic contract
 
 For a node launched below namespace `/usb_cam`:

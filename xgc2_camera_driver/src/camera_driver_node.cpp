@@ -726,6 +726,7 @@ class CameraDriverNode {
     mediaStill(static_cast<std::int64_t>(stamp.toNSec()));
   }
 
+#ifdef XGC2_CAMERA_MEDIA
   // Description of the picture source for the camera-source service.
   xgc2_camera_driver::SourceInfo sourceInfo() const
   {
@@ -755,6 +756,7 @@ class CameraDriverNode {
     }
     return info;
   }
+#endif
 
   void mediaOpened()
   {
@@ -1384,15 +1386,17 @@ int main(int argc, char** argv)
 
   // The media outputs outlive every opening of the device: the camera-source
   // service keeps its socket and instance identity while a camera is unplugged.
-  std::unique_ptr<MediaOutputs> media;
 #ifdef XGC2_CAMERA_MEDIA
+  std::unique_ptr<MediaOutputs> media_owner;
   try {
-    media.reset(new MediaOutputs(nh, xgc2_camera_driver::loadMediaOutputsConfig(private_nh)));
+    media_owner.reset(new MediaOutputs(nh, xgc2_camera_driver::loadMediaOutputsConfig(private_nh)));
   } catch (const std::exception& error) {
     ROS_FATAL_STREAM("XGC2 camera media outputs failed: " << error.what());
     return 1;
   }
+  MediaOutputs* media = media_owner.get();
 #else
+  MediaOutputs* media = nullptr;
   std::string control_socket;
   private_nh.param<std::string>("control_socket", control_socket, "");
   if (!control_socket.empty()) {
@@ -1402,7 +1406,7 @@ int main(int argc, char** argv)
 #endif
   while (ros::ok()) {
     try {
-      CameraDriverNode node(media.get());
+      CameraDriverNode node(media);
       return node.run();
     } catch (const xgc2::camera::CameraError& error) {
       if (source_kind != "v4l2") {
