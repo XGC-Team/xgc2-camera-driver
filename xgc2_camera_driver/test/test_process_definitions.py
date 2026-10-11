@@ -61,7 +61,7 @@ def node_parameter_names():
     for filename in ("camera_driver_node.cpp", "media_outputs.cpp"):
         with open(os.path.join(PACKAGE, "src", filename), encoding="utf-8") as handle:
             source = handle.read()
-        names |= set(re.findall(r'(?:private_nh_|nh|private_nh)\.param(?:<[^>]*>)?\(\s*"(\w+)"', source))
+        names |= set(re.findall(r'(?:private_nh_|nh|private_nh)\.(?:template\s+)?param(?:<[^>]*>)?\(\s*"(\w+)"', source))
     return names
 
 
