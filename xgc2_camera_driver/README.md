@@ -64,6 +64,16 @@ service stays up with its socket and instance identity and reports
 travels with a capture (`calibrationState: available`); an uncalibrated camera
 reports `unavailable` and the node never invents intrinsics.
 
+Readiness never needs media-edge, a preview subscriber, or a world clock. A
+still publishes its sealed image once even while simulation time is zero.
+With command-line process parameters the control socket is available before
+ROS registration and reports `ready:false` while the node waits for the
+configured master's PID and run id. Master startup retries use full jitter
+from 250 ms to a 30 s cap and bounded summary logs. Once bound, the node checks
+identity every 10 seconds and exits on master loss or replacement, including
+in ROS-only builds. Device reopen attempts use the same bounded backoff and
+reset after a captured frame.
+
 ## ROS image pipe
 
 `xgc2_ros_image_pipe` is a small roscpp tool for robots whose camera is already
@@ -86,6 +96,24 @@ and anything else that writes to standard output is moved there. A slow reader
 throttles the tool, which keeps just the newest image (queue of one). It needs
 only roscpp and `sensor_msgs`, builds as C++14 and is part of the Melodic
 package.
+
+The pipe uses one normal subscriber with a queue of one: an absent topic is an
+idle wait, and publisher updates reconnect it after a publisher restart. It
+never polls topic lists or exits because a publisher is missing. It follows the
+same master startup and replacement rules as the camera node.
+
+The hardware-free lifecycle test owns a random master port in 20000–40000 and
+its own ROS_HOME, and terminates and waits for every child:
+
+```bash
+python3 test/test_peer_lifecycle.py --bin-dir /path/to/devel/lib/xgc2_camera_driver
+python3 test/test_peer_lifecycle.py --bin-dir /path/to/devel/lib/xgc2_camera_driver --long
+```
+
+The long run holds the master, late topic, and restarted publisher down for
+60 seconds each, measuring CPU, TCP connection attempts, logs, threads, and
+open file descriptors. Fast runs use a short outage. The Noetic amd64 package
+CI cell runs the long tests before packaging.
 
 ## Topic contract
 

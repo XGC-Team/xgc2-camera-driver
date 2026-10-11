@@ -6,6 +6,17 @@ namespace xgc2_camera_driver {
 
 SourceState::SourceState(SourceInfo nominal) : info_(std::move(nominal)) {}
 
+void SourceState::bindMaster(const std::string& uri, const std::string& run_id, const int pid)
+{
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    info_.ros_master_uri = uri;
+    info_.ros_master_run_id = run_id;
+    info_.ros_master_pid = pid;
+  }
+  notify();
+}
+
 void SourceState::sourceOpened(const SourceInfo& info)
 {
   {

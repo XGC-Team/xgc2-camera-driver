@@ -30,6 +30,7 @@ struct MediaOutputsConfig {
 // Reads the media parameters of the private namespace. Throws
 // std::invalid_argument for values that cannot work.
 MediaOutputsConfig loadMediaOutputsConfig(ros::NodeHandle& private_nh);
+MediaOutputsConfig loadMediaOutputsConfig(const ros::M_string& private_parameters);
 
 // The consumers of a camera that exist only while somebody watches: the
 // camera-source service for media-edge and the 1080p H.264 preview for ROS
@@ -38,7 +39,8 @@ MediaOutputsConfig loadMediaOutputsConfig(ros::NodeHandle& private_nh);
 // reports not ready instead of disappearing.
 class MediaOutputs {
  public:
-  MediaOutputs(ros::NodeHandle& nh, MediaOutputsConfig config);
+  explicit MediaOutputs(MediaOutputsConfig config);
+  void bindROS(ros::NodeHandle& nh, const std::string& run_id, int master_pid);
   ~MediaOutputs();
   MediaOutputs(const MediaOutputs&) = delete;
   MediaOutputs& operator=(const MediaOutputs&) = delete;
@@ -58,7 +60,8 @@ class MediaOutputs {
   void previewSubscribersChanged(int delta);
 
   ros::Publisher preview_publisher_;
-  ros::WallTimer master_monitor_;
+  const bool preview_enabled_;
+  const std::string preview_topic_;
   std::atomic<int> preview_subscribers_{0};
   std::mutex frame_id_mutex_;
   std::string frame_id_;

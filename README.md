@@ -91,8 +91,9 @@ latched, so every late subscriber receives them without the node resending a
 megabyte-sized picture at a camera rate. The static transform chain
 `<parent> -> <camera>_link -> <camera>_optical_frame` is published on
 `/tf_static` exactly like the physical camera contract. Image, CameraInfo and TF
-carry the current ROS time (the simulation clock when `/use_sim_time` is set);
-the node waits for a valid clock instead of stamping with zero. The frame id is
+carry the current ROS time (the simulation clock when `/use_sim_time` is set),
+including zero before the clock arrives. Readiness needs the source's captured
+picture and never waits for a world clock or a subscriber. The frame id is
 the extrinsic's `child_frame`. A still publishes no `frame_timing` and no raw
 `image_raw`.
 

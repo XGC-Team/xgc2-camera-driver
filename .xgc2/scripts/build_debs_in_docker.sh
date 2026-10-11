@@ -90,10 +90,14 @@ docker run --rm \
     set +u
     source "/opt/ros/${ROS_DISTRO}/setup.bash"
     set -u
-    catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo
-    ROS_HOME=/workspace/work/ros-home ROS_LOG_DIR=/workspace/work/ros-log catkin_make run_tests
+    catkin_make -j2 -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    ROS_HOME=/workspace/work/ros-home ROS_LOG_DIR=/workspace/work/ros-log catkin_make -j2 run_tests
     catkin_test_results --verbose
-    DESTDIR=/workspace/work/install-root catkin_make install \
+    if [[ "${ROS_DISTRO}" == "noetic" && "$(dpkg --print-architecture)" == "amd64" ]]; then
+      nice -n 19 python3 /workspace/repo/xgc2_camera_driver/test/test_peer_lifecycle.py \
+        --bin-dir /workspace/work/devel/lib/xgc2_camera_driver --long
+    fi
+    DESTDIR=/workspace/work/install-root catkin_make -j2 install \
       -DCMAKE_INSTALL_PREFIX="/opt/ros/${ROS_DISTRO}" \
       -DCATKIN_ENABLE_TESTING=OFF
     /workspace/repo/.xgc2/scripts/package_debs.sh \

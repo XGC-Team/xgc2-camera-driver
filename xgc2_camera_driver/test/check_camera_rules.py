@@ -44,8 +44,12 @@ def check(root):
     assert "pipeline_->setPreviewWanted(count > 0)" in outputs
     assert "if (preview_subscribers_.load() <= 0)" in outputs
     assert "if (pipeline_->wanted())" in outputs
-    assert 'ros::param::get("/run_id"' in outputs and "current != run_id" in outputs
-    assert "ros::shutdown();" in outputs, "a replaced ROS master invalidates the camera binding"
+    binding = (package / "src/ros_master_binding.hpp").read_text()
+    assert 'execute("getPid"' in binding and 'arguments[1] = "/run_id"' in binding
+    assert "current.pid != identity_.pid" in binding and "current.run_id != identity_.run_id" in binding
+    assert "ros::shutdown();" in binding, "a replaced ROS master invalidates the camera binding"
+    assert node.index("master.wait()") < node.index("ros::NodeHandle nh;", node.index("int main("))
+    assert "waiting for the configured ROS master" in node
     pipeline = (package / "src/media_pipeline.cpp").read_text()
     selection = pipeline.split("bool MediaPipeline::selectWorkLocked", 1)[1].split("std::int64_t MediaPipeline::rtpTicks", 1)[0]
     assert "const bool rtp = state_ == State::Starting || state_ == State::Active" in selection
@@ -67,6 +71,7 @@ def check(root):
     assert 'if (operation == "capture")' in service
     pipe = (package / "src/ros_image_pipe.cpp").read_text()
     assert "subscribe" in pipe and "v4l2" not in pipe and "/dev/video" not in pipe
+    assert "master.wait()" in pipe and "master.monitor(" in pipe
 
 
 if __name__ == "__main__":

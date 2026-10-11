@@ -19,6 +19,7 @@
 #include <sensor_msgs/Image.h>
 
 #include "image_pipe.hpp"
+#include "ros_master_binding.hpp"
 
 namespace {
 
@@ -226,11 +227,19 @@ int main(int argc, char** argv)
   ros::init(argc, argv, "xgc2_ros_image_pipe", ros::init_options::AnonymousName);
   // roscpp handles SIGINT; a SIGTERM from the pipeline owner should also leave
   // the ROS master cleanly.
-  ::signal(SIGTERM, [](int) { ros::requestShutdown(); });
+  xgc2_camera_driver::RosMasterBinding::installSignals();
+  xgc2_camera_driver::RosMasterBinding master;
+  if (!master.wait()) {
+    ::close(data_fd);
+    return 0;
+  }
+  ros::master::setRetryTimeout(ros::WallDuration(0));
   ros::NodeHandle nh;
+  master.monitor([] { std::fprintf(stderr, "xgc2_ros_image_pipe: the bound ROS master was lost or replaced\n"); });
   Pipe pipe(options, data_fd);
   ros::Subscriber subscriber =
       nh.subscribe(options.topic, 1, &Pipe::onImage, &pipe, ros::TransportHints().tcpNoDelay());
   ros::spin();
-  return pipe.exitCode();
+  ::close(data_fd);
+  return master.lost() ? 1 : pipe.exitCode();
 }

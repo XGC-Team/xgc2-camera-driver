@@ -14,7 +14,11 @@ class UnixConnection(http.client.HTTPConnection):
     def connect(self):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
-        sock.connect(self._path)
+        try:
+            sock.connect(self._path)
+        except OSError:
+            sock.close()
+            raise
         self.sock = sock
 
 
@@ -28,8 +32,10 @@ def call(path, method, target, body=None, instance=None, timeout_ms=8000):
     if body is not None:
         headers["Content-Type"] = "application/json"
         payload = json.dumps(body)
-    connection.request(method, target, body=payload, headers=headers)
-    response = connection.getresponse()
-    data = response.read()
-    connection.close()
-    return response.status, dict(response.getheaders()), data
+    try:
+        connection.request(method, target, body=payload, headers=headers)
+        response = connection.getresponse()
+        data = response.read()
+        return response.status, dict(response.getheaders()), data
+    finally:
+        connection.close()

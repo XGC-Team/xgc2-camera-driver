@@ -84,7 +84,7 @@ add_dependencies(xgc2_ros_image_pipe ${catkin_EXPORTED_TARGETS})
 target_compile_features(xgc2_ros_image_pipe PRIVATE cxx_std_14)
 target_compile_options(xgc2_ros_image_pipe PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(xgc2_ros_image_pipe PRIVATE ${catkin_INCLUDE_DIRS})
-target_link_libraries(xgc2_ros_image_pipe PRIVATE ${catkin_LIBRARIES})
+target_link_libraries(xgc2_ros_image_pipe PRIVATE ${catkin_LIBRARIES} Threads::Threads)
 
 install(TARGETS xgc2_camera_driver_node xgc2_ros_image_pipe
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

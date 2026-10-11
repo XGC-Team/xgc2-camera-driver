@@ -17,6 +17,7 @@ struct SourceInfo {
   std::string frame_id;
   std::string ros_master_uri;
   std::string ros_master_run_id;
+  int ros_master_pid{0};
   std::uint32_t width{0};
   std::uint32_t height{0};
   // Nominal cadence; for a still the rate at which the stream is refreshed.
@@ -49,6 +50,7 @@ class SourceState {
 
   // The source is open: actual geometry and calibration replace the nominal.
   void sourceOpened(const SourceInfo& info);
+  void bindMaster(const std::string& uri, const std::string& run_id, int pid);
   // The source is lost; not ready until it reopens and delivers a frame.
   void sourceClosed(const std::string& reason);
   void framePublished(std::shared_ptr<const CaptureFrame> frame);

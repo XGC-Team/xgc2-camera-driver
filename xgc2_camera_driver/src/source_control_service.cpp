@@ -374,6 +374,7 @@ Json SourceControlService::factsJson() const
       {"source_open", state_->open()},
       {"ros_master_uri", info.ros_master_uri},
       {"ros_master_run_id", info.ros_master_run_id},
+      {"ros_master_pid", info.ros_master_pid},
       {"frames_flowing",
        state_->ready() && (info.source_kind == "still" ||
                           (age != std::chrono::milliseconds::max() &&

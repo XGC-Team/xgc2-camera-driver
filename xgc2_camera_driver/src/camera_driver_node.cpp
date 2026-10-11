@@ -3,12 +3,14 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <climits>
 #include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -39,6 +41,7 @@
 #include "capture_source.hpp"
 #include "clock_mapper.hpp"
 #include "source_frame.hpp"
+#include "ros_master_binding.hpp"
 #include "still_asset.hpp"
 
 #ifdef XGC2_CAMERA_MEDIA
@@ -478,6 +481,8 @@ class CameraDriverNode {
     return 0;
   }
 
+  bool capturedFrame() const { return capture_packet_count_.load() != 0U; }
+
  private:
   void loadParameters()
   {
@@ -650,13 +655,8 @@ class CameraDriverNode {
   int runStill()
   {
     running_.store(true);
-    // The image, CameraInfo and TF carry the current ROS time, which is the
-    // simulation clock when /use_sim_time is set. Wait for that clock instead
-    // of stamping the only publication with zero.
-    while (ros::ok() && ros::Time::now().isZero()) {
-      ROS_INFO_STREAM_THROTTLE(5.0, "XGC2 camera still waiting for ROS time");
-      ros::WallDuration(0.1).sleep();
-    }
+    // A sealed still is usable even before a simulation clock appears. Its
+    // first publication carries the current ROS time, including zero.
     if (ros::ok()) {
       publishStill();
     }
@@ -1392,21 +1392,70 @@ class CameraDriverNode {
 
 int main(int argc, char** argv)
 {
-  ros::init(argc, argv, "xgc2_camera_driver");
-  ros::AsyncSpinner spinner(1);
-  spinner.start();
+  ros::M_string private_parameters;
+  ros::M_string remappings;
+  for (int index = 1; index < argc; ++index) {
+    const std::string argument = argv[index];
+    const auto separator = argument.find(":=");
+    if (argument.size() > 1U && argument[0] == '_' && argument[1] != '_' &&
+        separator != std::string::npos) {
+      private_parameters[argument.substr(1U, separator - 1U)] = argument.substr(separator + 2U);
+    } else if (separator != std::string::npos) {
+      remappings[argument.substr(0, separator)] = argument.substr(separator + 2U);
+    }
+  }
+  // ros::init writes private command-line parameters to the master. Defer
+  // those writes until after our own bounded master wait.
+  ros::init(remappings, "xgc2_camera_driver");
+  xgc2_camera_driver::RosMasterBinding::installSignals();
+
+#ifdef XGC2_CAMERA_MEDIA
+  std::unique_ptr<MediaOutputs> media_owner;
+  // Command-line process definitions provide the socket before the parameter
+  // server exists. The same instance reports not ready throughout the wait.
+  if (!private_parameters["control_socket"].empty()) {
+    try {
+      media_owner.reset(new MediaOutputs(xgc2_camera_driver::loadMediaOutputsConfig(private_parameters)));
+      media_owner->sourceClosed("waiting for the configured ROS master");
+    } catch (const std::exception& error) {
+      ROS_FATAL_STREAM("XGC2 camera media outputs failed: " << error.what());
+      return 1;
+    }
+  }
+#endif
+  xgc2_camera_driver::RosMasterBinding master;
+  if (!master.wait()) return 0;
+  ros::master::setRetryTimeout(ros::WallDuration(0));
 
   ros::NodeHandle nh;
   ros::NodeHandle private_nh("~");
+  for (const auto& parameter : private_parameters) {
+    const std::string& value = parameter.second;
+    char* end = nullptr;
+    const long integer = std::strtol(value.c_str(), &end, 10);
+    if (value == "true" || value == "false") {
+      private_nh.setParam(parameter.first, value == "true");
+    } else if (!value.empty() && *end == '\0' && integer >= INT_MIN && integer <= INT_MAX) {
+      private_nh.setParam(parameter.first, static_cast<int>(integer));
+    } else {
+      const double real = std::strtod(value.c_str(), &end);
+      if (!value.empty() && *end == '\0') private_nh.setParam(parameter.first, real);
+      else private_nh.setParam(parameter.first, value);
+    }
+  }
+  ros::AsyncSpinner spinner(1);
+  spinner.start();
   std::string source_kind;
   private_nh.param<std::string>("source_kind", source_kind, "v4l2");
 
   // The media outputs outlive every opening of the device: the camera-source
   // service keeps its socket and instance identity while a camera is unplugged.
 #ifdef XGC2_CAMERA_MEDIA
-  std::unique_ptr<MediaOutputs> media_owner;
   try {
-    media_owner.reset(new MediaOutputs(nh, xgc2_camera_driver::loadMediaOutputsConfig(private_nh)));
+    if (!media_owner) {
+      media_owner.reset(new MediaOutputs(xgc2_camera_driver::loadMediaOutputsConfig(private_nh)));
+    }
+    media_owner->bindROS(nh, master.identity().run_id, master.identity().pid);
   } catch (const std::exception& error) {
     ROS_FATAL_STREAM("XGC2 camera media outputs failed: " << error.what());
     return 1;
@@ -1421,11 +1470,25 @@ int main(int argc, char** argv)
     return 1;
   }
 #endif
+  master.monitor([media] {
+#ifdef XGC2_CAMERA_MEDIA
+    media->sourceClosed("the bound ROS master is unavailable or replaced");
+#endif
+    ROS_FATAL("XGC2 camera lost its bound ROS master; stopping");
+  });
+  std::mt19937 reconnect_random(std::random_device{}());
+  long reconnect_backoff_ms = 250;
+  auto last_reconnect_log = std::chrono::steady_clock::time_point::min();
+  unsigned suppressed_reconnects = 0;
   while (ros::ok()) {
+    std::unique_ptr<CameraDriverNode> node;
     try {
-      CameraDriverNode node(media);
-      return node.run();
+      node.reset(new CameraDriverNode(media));
+      const int result = node->run();
+      return master.lost() ? 1 : result;
     } catch (const xgc2::camera::CameraError& error) {
+      if (node && node->capturedFrame()) reconnect_backoff_ms = 250;
+      node.reset();  // Release the old stream before the next device attempt.
       if (source_kind != "v4l2") {
         ROS_FATAL_STREAM(
             "XGC2 camera driver failed: " << error.what());
@@ -1434,16 +1497,29 @@ int main(int argc, char** argv)
 #ifdef XGC2_CAMERA_MEDIA
       media->sourceClosed(std::string("the camera is unavailable: ") + error.what());
 #endif
-      ROS_WARN_STREAM_THROTTLE(
-          10.0,
-          "XGC2 camera is unavailable; retaining the configured device and "
-          "waiting to reconnect: " << error.what());
-      ros::WallDuration(1.0).sleep();
+      const auto now = std::chrono::steady_clock::now();
+      if (last_reconnect_log == std::chrono::steady_clock::time_point::min() ||
+          now - last_reconnect_log >= std::chrono::seconds(10)) {
+        ROS_WARN_STREAM("XGC2 camera is unavailable; waiting to reconnect: " << error.what()
+                        << " (suppressed attempts: " << suppressed_reconnects << ")");
+        last_reconnect_log = now;
+        suppressed_reconnects = 0;
+      } else {
+        ++suppressed_reconnects;
+      }
+      const long delay = std::uniform_int_distribution<long>(0, reconnect_backoff_ms)(reconnect_random);
+      for (long remaining = delay; remaining > 0 && ros::ok();) {
+        const long slice = std::min(remaining, 250L);
+        timespec duration{0, slice * 1000000};
+        ::nanosleep(&duration, nullptr);
+        remaining -= slice;
+      }
+      reconnect_backoff_ms = std::min(30000L, reconnect_backoff_ms * 2);
     } catch (const std::exception& error) {
       ROS_FATAL_STREAM(
           "XGC2 camera driver failed: " << error.what());
       return 1;
     }
   }
-  return 0;
+  return master.lost() ? 1 : 0;
 }

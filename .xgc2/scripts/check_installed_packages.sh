@@ -59,17 +59,27 @@ cleanup() {
   rm -rf "${RUNTIME}"
 }
 trap cleanup EXIT
-export ROS_MASTER_URI="http://127.0.0.1:11359"
+ROS_MASTER_PORT="$(python3 - <<'PY'
+import random
+import socket
+
+while True:
+    port = random.SystemRandom().randint(20000, 40000)
+    with socket.socket() as candidate:
+        try:
+            candidate.bind(("127.0.0.1", port))
+        except OSError:
+            continue
+    print(port)
+    break
+PY
+)"
+export ROS_MASTER_URI="http://127.0.0.1:${ROS_MASTER_PORT}"
 export ROS_HOME="${RUNTIME}/ros-home"
 export ROS_LOG_DIR="${RUNTIME}/ros-log"
 mkdir -p "${ROS_HOME}" "${ROS_LOG_DIR}"
-roscore -p 11359 >"${RUNTIME}/roscore.log" 2>&1 &
+roscore -p "${ROS_MASTER_PORT}" >"${RUNTIME}/roscore.log" 2>&1 &
 ROSCORE_PID="$!"
-for _ in $(seq 1 50); do
-  if rosparam list >/dev/null 2>&1; then break; fi
-  sleep 0.1
-done
-rosparam list >/dev/null
 SOCKET_ARGS=()
 if [[ "${ROS_DISTRO}" == "noetic" ]]; then
   # RUNTIME is a private 0700 directory, as the supervisor provides one.
@@ -82,6 +92,7 @@ fi
   "${SOCKET_ARGS[@]}" \
   >"${RUNTIME}/driver.log" 2>&1 &
 DRIVER_PID="$!"
+# The node owns its master wait; the test starts both processes together.
 timeout 15 rostopic echo -n 1 /usb_cam/image_raw/compressed/header/stamp >"${RUNTIME}/stamp.yaml"
 timeout 15 rostopic echo -n 1 /usb_cam/camera_info/header/stamp >/dev/null
 test "$(rostopic type /usb_cam/image_raw/compressed)" = "sensor_msgs/CompressedImage"
