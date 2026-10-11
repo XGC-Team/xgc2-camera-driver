@@ -280,8 +280,7 @@
               "rosLogDir"
             ]
           }
-        ],
-        "additionalProperties": false
+        ]
       },
       "command": {
         "executable": "/opt/ros/noetic/lib/xgc2_camera_driver/xgc2_camera_driver_node",

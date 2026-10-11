@@ -147,7 +147,7 @@ class ProcessDefinitionTest(unittest.TestCase):
             self.assertEqual(definition["stop"], {"graceMs": 5000})
             self.assertEqual(definition["command"]["executable"],
                              "/opt/ros/noetic/lib/xgc2_camera_driver/xgc2_camera_driver_node")
-            self.assertFalse(definition["parameters"]["additionalProperties"])
+            self.assertNotIn("additionalProperties", definition["parameters"])
             self.assertNotIn("beforeStart", definition, "no hidden side effects before the start")
 
     def test_the_service_is_the_owned_unix_endpoint(self):

@@ -224,7 +224,6 @@
             ]
           }
         ],
-        "additionalProperties": false,
         "required": [
           "stillImage",
           "stillIntrinsicFile",
