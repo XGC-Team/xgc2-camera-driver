@@ -92,7 +92,13 @@ fi
   "${SOCKET_ARGS[@]}" \
   >"${RUNTIME}/driver.log" 2>&1 &
 DRIVER_PID="$!"
-# The node owns its master wait; the test starts both processes together.
+# The node owns its master wait; the test starts both processes together. Only the
+# test's own rostopic client needs the master up, so it waits for it here.
+for _ in $(seq 1 150); do
+  if rosparam list >/dev/null 2>&1; then break; fi
+  sleep 0.1
+done
+rosparam list >/dev/null
 timeout 15 rostopic echo -n 1 /usb_cam/image_raw/compressed/header/stamp >"${RUNTIME}/stamp.yaml"
 timeout 15 rostopic echo -n 1 /usb_cam/camera_info/header/stamp >/dev/null
 test "$(rostopic type /usb_cam/image_raw/compressed)" = "sensor_msgs/CompressedImage"
