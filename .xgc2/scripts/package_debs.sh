@@ -77,10 +77,10 @@ driver_depends() {
   case "${ROS_DISTRO}" in
     melodic)
       # Melodic builds the ROS-only camera: no FFmpeg, no XRPC.
-      printf '%s' "libopencv-core3.2, libopencv-imgcodecs3.2, libopencv-imgproc3.2, libxgc2-camera-dev (>= 0.1.0-10~bionic), libyaml-cpp0.5v5, ros-melodic-camera-info-manager, ros-melodic-cv-bridge, ros-melodic-diagnostic-msgs, ros-melodic-diagnostic-updater, ros-melodic-geometry-msgs, ros-melodic-image-transport, ros-melodic-rosbag, ros-melodic-roscpp, ros-melodic-roslaunch, ros-melodic-rostopic, ros-melodic-sensor-msgs, ros-melodic-tf2-ros, ros-melodic-xgc2-camera-msgs (>= 1.2.0-8)"
+      printf '%s' "libopencv-core3.2, libopencv-imgcodecs3.2, libopencv-imgproc3.2, libxgc2-camera-dev (>= 0.1.0-10~bionic), libyaml-cpp0.5v5, ros-melodic-camera-info-manager, ros-melodic-cv-bridge, ros-melodic-diagnostic-msgs, ros-melodic-diagnostic-updater, ros-melodic-geometry-msgs, ros-melodic-image-transport, ros-melodic-rosbag, ros-melodic-roscpp, ros-melodic-roslaunch, ros-melodic-rostopic, ros-melodic-sensor-msgs, ros-melodic-tf2-ros, ros-melodic-xgc2-camera-msgs (>= 1.5.0-1)"
       ;;
     noetic)
-      printf '%s' "libavcodec58, libavutil56, libopencv-core4.2, libopencv-imgcodecs4.2, libopencv-imgproc4.2, libswscale5, libxgc2-camera-dev (>= 0.1.0-10~focal), libxgc2-xrpc1, libyaml-cpp0.6, ros-noetic-camera-info-manager, ros-noetic-cv-bridge, ros-noetic-diagnostic-msgs, ros-noetic-diagnostic-updater, ros-noetic-foxglove-msgs, ros-noetic-geometry-msgs, ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp, ros-noetic-roslaunch, ros-noetic-rostopic, ros-noetic-sensor-msgs, ros-noetic-tf2-ros, ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)"
+      printf '%s' "libavcodec58, libavutil56, libopencv-core4.2, libopencv-imgcodecs4.2, libopencv-imgproc4.2, libswscale5, libxgc2-camera-dev (>= 0.1.0-10~focal), libxgc2-xrpc2, libyaml-cpp0.6, ros-noetic-camera-info-manager, ros-noetic-cv-bridge, ros-noetic-diagnostic-msgs, ros-noetic-diagnostic-updater, ros-noetic-foxglove-msgs, ros-noetic-geometry-msgs, ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp, ros-noetic-roslaunch, ros-noetic-rostopic, ros-noetic-sensor-msgs, ros-noetic-tf2-ros, ros-noetic-xgc2-camera-msgs (>= 1.5.0-1)"
       ;;
     *)
       echo "unsupported ROS_DISTRO: ${ROS_DISTRO}" >&2

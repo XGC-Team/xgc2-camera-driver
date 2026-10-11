@@ -41,7 +41,7 @@ apt:
   - libswscale5
   - libxgc2-camera-dev (>= 0.1.0-10~bionic)
   - libxgc2-camera-dev (>= 0.1.0-10~focal)
-  - libxgc2-xrpc1
+  - libxgc2-xrpc2
   - libyaml-cpp0.5v5
   - libyaml-cpp0.6
   - ros-melodic-camera-info-manager
@@ -69,8 +69,8 @@ apt:
   - ros-noetic-sensor-msgs
   - ros-melodic-tf2-ros
   - ros-noetic-tf2-ros
-  - ros-melodic-xgc2-camera-msgs (>= 1.2.0-8)
-  - ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)
+  - ros-melodic-xgc2-camera-msgs (>= 1.5.0-1)
+  - ros-noetic-xgc2-camera-msgs (>= 1.5.0-1)
 usage:
   install: 'sudo apt update
 
