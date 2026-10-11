@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
+python3 xgc2_camera_driver/test/check_camera_rules.py
+
 for script in .xgc2/scripts/*.sh; do
   bash -n "${script}"
 done
