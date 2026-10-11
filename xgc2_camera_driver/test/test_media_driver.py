@@ -6,7 +6,6 @@ The test starts the node itself so that it owns the private runtime directory
 the service socket lives in, exactly as the process supervisor does.
 """
 
-import http.client
 import json
 import os
 import shutil
@@ -17,7 +16,6 @@ import tempfile
 import threading
 import time
 import unittest
-import uuid
 
 import cv2
 import numpy as np
@@ -25,36 +23,9 @@ import rospy
 import rostest
 from foxglove_msgs.msg import CompressedVideo
 from sensor_msgs.msg import CompressedImage
+from xrpc_unix import call
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-
-
-class UnixConnection(http.client.HTTPConnection):
-    def __init__(self, path, timeout=10.0):
-        super().__init__("localhost", timeout=timeout)
-        self._path = path
-
-    def connect(self):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
-        sock.connect(self._path)
-        self.sock = sock
-
-
-def call(path, method, target, body=None, instance=None, timeout_ms=8000):
-    connection = UnixConnection(path, timeout=timeout_ms / 1000.0 + 2.0)
-    headers = {"X-Request-ID": uuid.uuid4().hex, "X-Xrpc-Timeout-Ms": str(timeout_ms)}
-    if instance:
-        headers["X-Xrpc-Instance-ID"] = instance
-    payload = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        payload = json.dumps(body)
-    connection.request(method, target, body=payload, headers=headers)
-    response = connection.getresponse()
-    data = response.read()
-    connection.close()
-    return response.status, dict(response.getheaders()), data
 
 
 class RtpReceiver:

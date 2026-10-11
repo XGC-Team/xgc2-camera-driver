@@ -76,10 +76,11 @@ EOF
 driver_depends() {
   case "${ROS_DISTRO}" in
     melodic)
-      printf '%s' "ffmpeg, libavcodec57, libavutil55, libopencv-core3.2, libopencv-imgcodecs3.2, libopencv-imgproc3.2, libswscale4, libxgc2-camera-dev (>= 0.1.0-10~bionic), ros-melodic-camera-info-manager, ros-melodic-cv-bridge, ros-melodic-diagnostic-msgs, ros-melodic-diagnostic-updater, ros-melodic-image-transport, ros-melodic-rosbag, ros-melodic-roscpp, ros-melodic-roslaunch, ros-melodic-rostopic, ros-melodic-sensor-msgs, ros-melodic-xgc2-camera-msgs (>= 1.2.0-8)"
+      # Melodic builds the ROS-only camera: no FFmpeg, no XRPC.
+      printf '%s' "libopencv-core3.2, libopencv-imgcodecs3.2, libopencv-imgproc3.2, libxgc2-camera-dev (>= 0.1.0-10~bionic), libyaml-cpp0.5v5, ros-melodic-camera-info-manager, ros-melodic-cv-bridge, ros-melodic-diagnostic-msgs, ros-melodic-diagnostic-updater, ros-melodic-geometry-msgs, ros-melodic-image-transport, ros-melodic-rosbag, ros-melodic-roscpp, ros-melodic-roslaunch, ros-melodic-rostopic, ros-melodic-sensor-msgs, ros-melodic-tf2-ros, ros-melodic-xgc2-camera-msgs (>= 1.2.0-8)"
       ;;
     noetic)
-      printf '%s' "ffmpeg, libavcodec58, libavutil56, libopencv-core4.2, libopencv-imgcodecs4.2, libopencv-imgproc4.2, libswscale5, libxgc2-camera-dev (>= 0.1.0-10~focal), ros-noetic-camera-info-manager, ros-noetic-cv-bridge, ros-noetic-diagnostic-msgs, ros-noetic-diagnostic-updater, ros-noetic-foxglove-msgs, ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp, ros-noetic-roslaunch, ros-noetic-rostopic, ros-noetic-sensor-msgs, ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)"
+      printf '%s' "libavcodec58, libavutil56, libopencv-core4.2, libopencv-imgcodecs4.2, libopencv-imgproc4.2, libswscale5, libxgc2-camera-dev (>= 0.1.0-10~focal), libxgc2-xrpc1, libyaml-cpp0.6, ros-noetic-camera-info-manager, ros-noetic-cv-bridge, ros-noetic-diagnostic-msgs, ros-noetic-diagnostic-updater, ros-noetic-foxglove-msgs, ros-noetic-geometry-msgs, ros-noetic-image-transport, ros-noetic-rosbag, ros-noetic-roscpp, ros-noetic-roslaunch, ros-noetic-rostopic, ros-noetic-sensor-msgs, ros-noetic-tf2-ros, ros-noetic-xgc2-camera-msgs (>= 1.2.0-8)"
       ;;
     *)
       echo "unsupported ROS_DISTRO: ${ROS_DISTRO}" >&2
@@ -96,23 +97,37 @@ build_driver() {
   if [[ "${ROS_DISTRO}" == "melodic" ]]; then
     copy_ros_package foxglove_msgs "${package_root}"
   fi
+  # Process definitions belong to the supervisor's flat definition directory,
+  # not under the ROS prefix.
+  local definitions="${INSTALL_ROOT}${PREFIX}/share/xgc2/process-definitions"
+  if [[ -d "${definitions}" ]]; then
+    mkdir -p "${package_root}/usr/share/xgc2/process-definitions"
+    cp -a "${definitions}/." "${package_root}/usr/share/xgc2/process-definitions/"
+  fi
   write_control "${package_root}" "${package_name}" \
     "$(driver_depends)" \
     "XGC2 ROS ${ROS_DISTRO} adapter for the independent Linux camera core"
   test -x "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node"
+  test -x "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_ros_image_pipe"
+  if [[ "${ROS_DISTRO}" == "noetic" ]]; then
+    test -f "${package_root}/usr/share/xgc2/process-definitions/xgc2-camera-v4l2.json"
+    test -f "${package_root}/usr/share/xgc2/process-definitions/xgc2-camera-still.json"
+  fi
   if [[ "${ROS_DISTRO}" == "melodic" ]]; then
     test -d "${package_root}${PREFIX}/share/foxglove_msgs"
   fi
   find "${package_root}" -type d -exec chmod 0755 {} +
   find "${package_root}" -type f -exec chmod 0644 {} +
   chmod 0755 "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node"
+  chmod 0755 "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_ros_image_pipe"
   for bin in xgc_camera_apply_alignment xgc_camera_alignment xgc_camera_bag_export
   do
     if [[ -e "${package_root}${PREFIX}/lib/xgc2_camera_driver/${bin}" ]]; then
       chmod 0755 "${package_root}${PREFIX}/lib/xgc2_camera_driver/${bin}"
     fi
   done
-  strip --strip-unneeded "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node" 2>/dev/null || true
+  strip --strip-unneeded "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_camera_driver_node" \
+    "${package_root}${PREFIX}/lib/xgc2_camera_driver/xgc2_ros_image_pipe" 2>/dev/null || true
   fakeroot dpkg-deb --build "${package_root}" "${OUTPUT_DIR}/${package_name}_${VERSION}_${ARCH}.deb" >/dev/null
 }
 

@@ -1,0 +1,314 @@
+{
+  "apiVersion": "xgc.execution.process/v1",
+  "definitions": [
+    {
+      "id": "xgc2-camera-still",
+      "version": "1.0.0",
+      "label": "XGC2 camera (sealed still scene)",
+      "description": "One camera node for a sealed scene image with its intrinsics and extrinsics. The JPEG, CameraInfo and stream description are published once, latched, with the static TF chain of the physical camera; nothing is re-sent periodically. The camera-source service encodes the scene as one IDR per viewer join followed by skip pictures at stillFps, so a static scene costs a few bytes per second instead of a camera-rate JPEG stream. Ready means the image is loaded and published.",
+      "drivers": [
+        "host"
+      ],
+      "parameters": {
+        "properties": {
+          "nodeName": {
+            "type": "string",
+            "description": "ROS node name.",
+            "default": "camera"
+          },
+          "cameraNamespace": {
+            "type": "string",
+            "description": "ROS namespace; the camera topics live below it.",
+            "default": "/usb_cam"
+          },
+          "cameraName": {
+            "type": "string",
+            "description": "Stable camera name (stream id and calibration partition).",
+            "default": "usb_cam"
+          },
+          "controlSocket": {
+            "type": "string",
+            "description": "camera-source service socket, created by the supervisor inside its private runtime directory.",
+            "default": "",
+            "fixedOnly": true,
+            "ownedEndpoint": "unix-socket"
+          },
+          "sourceId": {
+            "type": "string",
+            "description": "Source id media-edge uses for this camera in its source roster.",
+            "default": "camera"
+          },
+          "rtpHost": {
+            "type": "string",
+            "description": "Loopback destination of the H.264/RTP stream; must equal media-edge's RTP listener host.",
+            "default": "127.0.0.1"
+          },
+          "rtpPort": {
+            "type": "integer",
+            "description": "Destination port of the H.264/RTP stream; must equal media-edge's RTP listener port.",
+            "default": 5004,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "h264Encoder": {
+            "type": "string",
+            "description": "h264_nvenc prefers the NVIDIA hardware encoder and falls back to libx264 when it cannot be opened; libx264 never tries the hardware.",
+            "default": "h264_nvenc",
+            "enum": [
+              "h264_nvenc",
+              "libx264"
+            ]
+          },
+          "h264Bitrate": {
+            "type": "integer",
+            "description": "Target bit rate of the RTP stream in bits per second; the ceiling in quality mode.",
+            "default": 25000000,
+            "minimum": 100000,
+            "maximum": 1000000000
+          },
+          "h264Preset": {
+            "type": "string",
+            "description": "libx264 preset; empty selects veryfast.",
+            "default": ""
+          },
+          "h264GopSeconds": {
+            "type": "number",
+            "description": "Seconds between IDR pictures of a live stream; a requested keyframe is always an IDR.",
+            "default": 1.0,
+            "minimum": 0.1,
+            "maximum": 60.0
+          },
+          "h264RateControl": {
+            "type": "string",
+            "description": "bitrate: target bit rate; quality: constant quality with the bit rate as ceiling; auto: quality for a still, bitrate otherwise.",
+            "default": "auto",
+            "enum": [
+              "auto",
+              "bitrate",
+              "quality"
+            ]
+          },
+          "h264Quality": {
+            "type": "integer",
+            "description": "CRF (libx264) or CQ (NVENC) in quality mode; lower is better.",
+            "default": 23,
+            "minimum": 0,
+            "maximum": 51
+          },
+          "previewEnabled": {
+            "type": "boolean",
+            "description": "Publish the 1080p H.264 preview topic while it has subscribers.",
+            "default": true
+          },
+          "previewTopic": {
+            "type": "string",
+            "description": "Preview topic below the camera namespace.",
+            "default": "video_h264"
+          },
+          "previewMaxWidth": {
+            "type": "integer",
+            "description": "Largest preview width; the picture is never enlarged.",
+            "default": 1920,
+            "minimum": 16,
+            "maximum": 16384
+          },
+          "previewMaxHeight": {
+            "type": "integer",
+            "description": "Largest preview height; the picture is never enlarged.",
+            "default": 1080,
+            "minimum": 16,
+            "maximum": 16384
+          },
+          "previewBitrate": {
+            "type": "integer",
+            "description": "Preview bit rate in bits per second.",
+            "default": 8000000,
+            "minimum": 100000,
+            "maximum": 1000000000
+          },
+          "rosMasterUri": {
+            "type": "string",
+            "default": "http://127.0.0.1:11311",
+            "output": true
+          },
+          "rosIp": {
+            "type": "string",
+            "default": "",
+            "output": true
+          },
+          "rosHostname": {
+            "type": "string",
+            "default": "",
+            "output": true
+          },
+          "rosLogDir": {
+            "type": "string",
+            "default": "/var/lib/xgc2/ros/log/camera"
+          },
+          "stillImage": {
+            "type": "string",
+            "description": "Sealed scene image, loaded once.",
+            "x-xgc-path-kind": "file",
+            "x-xgc-file-extensions": [
+              ".png",
+              ".jpg",
+              ".jpeg"
+            ]
+          },
+          "stillIntrinsicFile": {
+            "type": "string",
+            "description": "xgc2.camera.intrinsic.v1 intrinsics of the image.",
+            "x-xgc-path-kind": "file",
+            "x-xgc-file-extensions": [
+              ".yaml",
+              ".yml"
+            ]
+          },
+          "stillExtrinsicFile": {
+            "type": "string",
+            "description": "xgc2.camera.extrinsic.v1 pose of the optical frame; its child frame is the frame id.",
+            "x-xgc-path-kind": "file",
+            "x-xgc-file-extensions": [
+              ".yaml",
+              ".yml"
+            ]
+          },
+          "stillJpegQuality": {
+            "type": "integer",
+            "description": "Quality of the one-time PNG to JPEG conversion; a JPEG is published byte for byte.",
+            "default": 95,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "stillFps": {
+            "type": "number",
+            "description": "Pictures per second of the H.264 streams; the scene itself never changes.",
+            "default": 1.0,
+            "minimum": 0.1,
+            "maximum": 60.0
+          },
+          "stillGopSeconds": {
+            "type": "number",
+            "description": "Seconds between IDR pictures of the still stream.",
+            "default": 30.0,
+            "minimum": 1.0,
+            "maximum": 3600.0
+          }
+        },
+        "groups": [
+          {
+            "id": "media",
+            "label": "H.264 media",
+            "collapsed": true,
+            "parameters": [
+              "rtpHost",
+              "rtpPort",
+              "h264Encoder",
+              "h264Bitrate",
+              "h264Preset",
+              "h264GopSeconds",
+              "h264RateControl",
+              "h264Quality",
+              "previewEnabled",
+              "previewTopic",
+              "previewMaxWidth",
+              "previewMaxHeight",
+              "previewBitrate"
+            ]
+          },
+          {
+            "id": "ros-advanced",
+            "label": "ROS Advanced",
+            "collapsed": true,
+            "parameters": [
+              "rosMasterUri",
+              "rosIp",
+              "rosHostname",
+              "rosLogDir"
+            ]
+          }
+        ],
+        "additionalProperties": false,
+        "required": [
+          "stillImage",
+          "stillIntrinsicFile",
+          "stillExtrinsicFile"
+        ]
+      },
+      "command": {
+        "executable": "/opt/ros/noetic/lib/xgc2_camera_driver/xgc2_camera_driver_node",
+        "args": [
+          "__name:=${nodeName}",
+          "__ns:=${cameraNamespace}",
+          "_source_kind:=still",
+          "_camera_name:=${cameraName}",
+          "_still_image:=${stillImage}",
+          "_still_intrinsic_file:=${stillIntrinsicFile}",
+          "_still_extrinsic_file:=${stillExtrinsicFile}",
+          "_still_jpeg_quality:=${stillJpegQuality}",
+          "_still_fps:=${stillFps}",
+          "_still_gop_seconds:=${stillGopSeconds}",
+          "_control_socket:=${controlSocket}",
+          "_source_id:=${sourceId}",
+          "_rtp_host:=${rtpHost}",
+          "_rtp_port:=${rtpPort}",
+          "_h264_encoder:=${h264Encoder}",
+          "_h264_bitrate:=${h264Bitrate}",
+          "_h264_preset:=${h264Preset}",
+          "_h264_gop_seconds:=${h264GopSeconds}",
+          "_h264_rate_control:=${h264RateControl}",
+          "_h264_quality:=${h264Quality}",
+          "_preview_enabled:=${previewEnabled}",
+          "_preview_topic:=${previewTopic}",
+          "_preview_max_width:=${previewMaxWidth}",
+          "_preview_max_height:=${previewMaxHeight}",
+          "_preview_bitrate:=${previewBitrate}"
+        ],
+        "env": {
+          "ROS_MASTER_URI": "${rosMasterUri}",
+          "ROS_IP": "${rosIp}",
+          "ROS_HOSTNAME": "${rosHostname}",
+          "ROS_LOG_DIR": "${rosLogDir}",
+          "ROS_DISTRO": "noetic",
+          "ROS_VERSION": "1",
+          "ROS_ROOT": "/opt/ros/noetic/share/ros",
+          "ROS_PACKAGE_PATH": "/opt/ros/noetic/share",
+          "LD_LIBRARY_PATH": "/opt/ros/noetic/lib:/opt/ros/noetic/lib/x86_64-linux-gnu:/opt/ros/noetic/lib/aarch64-linux-gnu",
+          "PATH": "/opt/ros/noetic/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        }
+      },
+      "readiness": {
+        "kind": "describe",
+        "interval": 1000000000,
+        "timeout": 30000000000,
+        "successThreshold": 1,
+        "failureThreshold": 1
+      },
+      "liveness": {
+        "kind": "process",
+        "interval": 5000000000,
+        "timeout": 1000000000,
+        "successThreshold": 1,
+        "failureThreshold": 3
+      },
+      "stop": {
+        "gracePeriod": 5000000000
+      },
+      "restart": {
+        "mode": "never",
+        "maxRestarts": 0,
+        "backoff": 0
+      },
+      "services": [
+        {
+          "service": "camera-source",
+          "api_version": "v1",
+          "profile": "http.v1",
+          "endpointParameter": "controlSocket",
+          "describePath": "/v1/describe"
+        }
+      ],
+      "digest": ""
+    }
+  ]
+}

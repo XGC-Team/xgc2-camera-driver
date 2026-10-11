@@ -41,17 +41,17 @@ docker run --rm \
       dpkg-dev \
       fakeroot \
       file \
-      libavcodec-dev \
-      libavutil-dev \
-      libswscale-dev \
+      libyaml-cpp-dev \
       pkg-config \
       rsync \
       "ros-${ROS_DISTRO}-camera-info-manager" \
       "ros-${ROS_DISTRO}-cv-bridge" \
       "ros-${ROS_DISTRO}-diagnostic-updater" \
+      "ros-${ROS_DISTRO}-geometry-msgs" \
       "ros-${ROS_DISTRO}-image-transport" \
       "ros-${ROS_DISTRO}-roscpp" \
-      "ros-${ROS_DISTRO}-rostest"
+      "ros-${ROS_DISTRO}-rostest" \
+      "ros-${ROS_DISTRO}-tf2-ros"
     do
       if ! dpkg -s "${pkg}" >/dev/null 2>&1; then
         echo "image is missing ${pkg}; add it to xgc2-images, do not apt in product CI" >&2
@@ -59,10 +59,13 @@ docker run --rm \
       fi
     done
     if [[ "${ROS_DISTRO}" == "noetic" ]]; then
-      dpkg -s ros-noetic-foxglove-msgs >/dev/null 2>&1 || {
-        echo "image is missing ros-noetic-foxglove-msgs" >&2
-        exit 1
-      }
+      # The H.264/RTP media outputs are built on Ubuntu 20.04 and newer only.
+      for pkg in libavcodec-dev libavutil-dev libswscale-dev ros-noetic-foxglove-msgs; do
+        dpkg -s "${pkg}" >/dev/null 2>&1 || {
+          echo "image is missing ${pkg}; add it to xgc2-images, do not apt in product CI" >&2
+          exit 1
+        }
+      done
     fi
 
     echo "deb [trusted=yes arch=$(dpkg --print-architecture)] https://xgc2.apt.xiaokang.ink ${suite} main" >/etc/apt/sources.list.d/xgc2.list
@@ -73,6 +76,9 @@ docker run --rm \
     apt-get install -y --no-install-recommends \
       libxgc2-camera-dev \
       "ros-${ROS_DISTRO}-xgc2-camera-msgs"
+    if [[ "${ROS_DISTRO}" == "noetic" ]]; then
+      apt-get install -y --no-install-recommends libxgc2-xrpc-dev
+    fi
     rm -rf /workspace/work/src /workspace/work/build /workspace/work/devel /workspace/work/install-root
     mkdir -p /workspace/work/src/xgc2_camera_driver
     rsync -a --delete /workspace/repo/xgc2_camera_driver/ /workspace/work/src/xgc2_camera_driver/

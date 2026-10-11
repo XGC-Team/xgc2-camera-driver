@@ -1,0 +1,6 @@
+<launch>
+  <test test-name="process_definitions"
+        pkg="xgc2_camera_driver"
+        type="test_process_definitions.py"
+        time-limit="120" />
+</launch>

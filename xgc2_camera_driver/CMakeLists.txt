@@ -92,6 +92,14 @@ install(TARGETS xgc2_camera_driver_node xgc2_ros_image_pipe
 install(DIRECTORY launch config
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
+# Process definitions for the supervisor; they describe the media-capable node,
+# so they ship only with it.
+if(XGC2_CAMERA_MEDIA)
+  install(DIRECTORY process-definitions/
+    DESTINATION ${CATKIN_GLOBAL_SHARE_DESTINATION}/xgc2/process-definitions
+    FILES_MATCHING PATTERN "*.json"
+  )
+endif()
 install(FILES README.md
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
@@ -202,6 +210,7 @@ if(CATKIN_ENABLE_TESTING)
     add_rostest(test/image_pipe.test)
     if(XGC2_CAMERA_MEDIA)
       add_rostest(test/media_driver.test)
+      add_rostest(test/process_definitions.test)
     endif()
   endif()
 endif()

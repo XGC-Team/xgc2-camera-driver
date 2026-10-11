@@ -110,10 +110,14 @@ roslaunch xgc2_camera_driver camera.launch \
 
 ## Automation
 
-`/usr/share/xgc2/process-definitions/xgc2-camera-driver-ros1.json` registers
-`xgc2-camera-v4l2-ros1`. Readiness and liveness consume only the
-`header/stamp` field of a real image message, so a registered node that is not
-publishing frames is not considered ready.
+The Ubuntu 20.04 package installs two process definitions in
+`/usr/share/xgc2/process-definitions/`: `xgc2-camera-v4l2.json` (a V4L2 MJPEG
+camera) and `xgc2-camera-still.json` (a sealed scene image with its intrinsics
+and extrinsics). Both start the same node, declare the `camera-source` service
+on an owned Unix socket and use the service's `describe` as readiness, so a node
+that is alive but has no picture is not ready. Core passes the socket path on the
+command line; media-edge is configured with the same RTP port and source id and
+leases the stream over that socket.
 
 ## Calibration
 
@@ -127,5 +131,8 @@ existing intrinsic YAML through the standard `camera_info_manager` contract.
 CI builds and tests the driver against the release-resolved
 `libxgc2-camera-dev`, creates `ros-melodic-xgc2-camera-driver` (Bionic) and
 `ros-noetic-xgc2-camera-driver` (Focal) for `amd64` and `arm64`, installs each
-in a clean container, and verifies the installed launches and RTP tools. Melodic
-has no archive `foxglove_msgs`, so that interface is built with this package.
+in a clean container, and verifies the installed launches, tools and, on Focal,
+the process definitions and the camera-source service. The Focal package also
+needs `libxgc2-xrpc-dev` to build; the Bionic package is the ROS-only camera.
+Melodic has no archive `foxglove_msgs`, so that interface is built with this
+package.
