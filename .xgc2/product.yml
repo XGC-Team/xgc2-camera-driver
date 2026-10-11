@@ -112,6 +112,7 @@ release:
   dependency_policy:
     libxgc2-camera-dev: rebuild
     xgc2-ros-msgs: rebuild
+    xgc2-xrpc: rebuild
   repository: XGC-Team/xgc2-camera-driver
   ref: main
   workflow: release.yml
