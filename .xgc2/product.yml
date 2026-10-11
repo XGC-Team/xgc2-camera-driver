@@ -109,6 +109,7 @@ release:
   requires:
   - libxgc2-camera-dev
   - xgc2-ros-msgs
+  - xgc2-xrpc
   dependency_policy:
     libxgc2-camera-dev: rebuild
     xgc2-ros-msgs: rebuild
