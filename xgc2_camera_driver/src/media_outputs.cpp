@@ -79,6 +79,7 @@ MediaOutputsConfig loadConfig(Parameters& nh)
   double framerate = 20.0;
   nh.template param<std::string>("source_kind", source_kind, "v4l2");
   nh.template param<std::string>("camera_name", camera_name, "usb_cam");
+  config.camera_name = camera_name;
   nh.param("width", width, width);
   nh.param("height", height, height);
   nh.param("framerate", framerate, framerate);
@@ -188,6 +189,7 @@ MediaOutputs::MediaOutputs(MediaOutputsConfig config)
     options.socket_path = config.control_socket;
     options.target_id = config.target_id;
     options.source_id = config.source_id;
+    options.camera_name = config.camera_name;
     service_.reset(new SourceControlService(options, pipeline_.get(), &state_));
     ROS_INFO_STREAM(
         "XGC2 camera-source service on " << config.control_socket

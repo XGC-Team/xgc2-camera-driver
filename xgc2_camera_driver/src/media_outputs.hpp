@@ -22,6 +22,7 @@ struct MediaOutputsConfig {
   std::string control_socket;
   std::string target_id;
   std::string source_id;
+  std::string camera_name;
   std::string preview_topic{"video_h264"};
   // Description of the source before it is open, from the parameters.
   SourceInfo nominal;

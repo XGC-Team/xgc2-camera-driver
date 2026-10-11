@@ -33,6 +33,8 @@ class SourceControlService {
     // it with its own host name.
     std::string target_id;
     std::string source_id;
+    // Stable calibration partition owned by the camera driver.
+    std::string camera_name;
     // Where the stream goes; reported by the descriptor.
     std::uint8_t rtp_payload_type{96};
   };

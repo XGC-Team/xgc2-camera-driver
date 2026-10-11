@@ -190,6 +190,7 @@ class Fixture {
     options.socket_path = socket_;
     options.target_id = "test-target";
     options.source_id = "front";
+    options.camera_name = "usb_front";
     service_.reset(new driver::SourceControlService(options, &pipeline_, &state_));
     if (open) {
       openSource(kind);
@@ -277,7 +278,8 @@ TEST(SourceControlService, DiscoveryIsTheOnlyUnfencedRoute)
   EXPECT_EQ(body.at("api_version"), "v1");
   EXPECT_EQ(body.at("ready"), false);
   EXPECT_FALSE(body.at("instance_id").get<std::string>().empty());
-  const Json ref = body.at("service_ref");
+  EXPECT_EQ(body.size(), 5U);
+  const Json ref = body.at("facts").at("service_ref");
   EXPECT_EQ(ref.at("target_id"), "test-target");
   EXPECT_EQ(ref.at("service"), "camera-source");
   EXPECT_EQ(ref.at("api_version"), "v1");
@@ -285,7 +287,7 @@ TEST(SourceControlService, DiscoveryIsTheOnlyUnfencedRoute)
   EXPECT_EQ(ref.at("instance_id"), body.at("instance_id"));
   EXPECT_EQ(ref.at("endpoint").at("kind"), "unix");
   EXPECT_EQ(ref.at("endpoint").at("address"), fixture.socket());
-  EXPECT_EQ(body.at("sources"), Json::array({"front"}));
+  EXPECT_EQ(body.at("facts").at("sources"), Json::array({"front"}));
   EXPECT_FALSE(body.at("facts").at("source_open").get<bool>());
   EXPECT_FALSE(body.at("facts").at("reason").get<std::string>().empty());
 
@@ -659,6 +661,17 @@ TEST(SourceControlService, ConfigurationIsRevisionedEphemeralAndAppliedOnlyWhile
   EXPECT_EQ(busy.status, 409);
   EXPECT_NE(busy.errorMessage().find("restart_required"), std::string::npos);
   EXPECT_EQ(fixture.pipeline().bitrate(), 2000000U);
+}
+
+TEST(SourceControlService, DescribePublishesDistinctSourceAndCalibrationIdentities)
+{
+  Fixture fixture;
+  Client client = fixture.discover();
+  const Json description = client.get("/v1/describe").json();
+  const Json& facts = description.at("facts");
+  EXPECT_EQ(facts.at("source_id"), "front");
+  EXPECT_EQ(facts.at("sourceId"), "front");
+  EXPECT_EQ(facts.at("cameraName"), "usb_front");
 }
 
 TEST(SourceControlService, UnknownRoutesMethodsAndSourcesAreRefused)

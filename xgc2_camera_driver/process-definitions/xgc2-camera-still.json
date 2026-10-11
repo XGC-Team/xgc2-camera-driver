@@ -186,6 +186,11 @@
             "default": 30.0,
             "minimum": 1.0,
             "maximum": 3600.0
+          },
+          "targetId": {
+            "type": "string",
+            "description": "Execution target identity shared with the local Media Edge. Empty uses the host name for standalone operation.",
+            "default": ""
           }
         },
         "groups": [
@@ -256,7 +261,8 @@
           "_preview_topic:=${previewTopic}",
           "_preview_max_width:=${previewMaxWidth}",
           "_preview_max_height:=${previewMaxHeight}",
-          "_preview_bitrate:=${previewBitrate}"
+          "_preview_bitrate:=${previewBitrate}",
+          "_target_id:=${targetId}"
         ],
         "env": {
           "ROS_MASTER_URI": "${rosMasterUri}",

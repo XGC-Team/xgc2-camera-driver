@@ -371,6 +371,8 @@ Json SourceControlService::factsJson() const
   Json facts = {
       {"source_kind", info.source_kind},
       {"source_id", options_.source_id},
+      {"sourceId", options_.source_id},
+      {"cameraName", options_.camera_name},
       {"source_open", state_->open()},
       {"ros_master_uri", info.ros_master_uri},
       {"ros_master_run_id", info.ros_master_run_id},
@@ -404,16 +406,16 @@ Json SourceControlService::factsJson() const
 
 Json SourceControlService::serviceDescription() const
 {
+  Json facts = factsJson();
+  facts["service_ref"] = serviceRef();
+  facts["sources"] = Json::array({options_.source_id});
+  facts["limits"] = {{"sources", 1}, {"concurrent_captures", 1}};
   return {
       {"service", kService},
       {"api_version", kApiVersion},
       {"instance_id", instance_id_},
       {"ready", state_->ready()},
-      {"facts", factsJson()},
-      {"describe_path", "/v1/describe"},
-      {"service_ref", serviceRef()},
-      {"sources", Json::array({options_.source_id})},
-      {"limits", {{"sources", 1}, {"concurrent_captures", 1}}},
+      {"facts", std::move(facts)},
   };
 }
 

@@ -187,7 +187,7 @@ class SyntheticCameraMediaTest(unittest.TestCase):
         self.assertEqual(description["instance_id"], self.camera.instance)
         self.assertEqual(description["facts"]["source_kind"], "synthetic")
         self.assertTrue(description["facts"]["frames_flowing"])
-        self.assertEqual(description["service_ref"]["endpoint"]["address"], self.camera.socket)
+        self.assertEqual(description["facts"]["service_ref"]["endpoint"]["address"], self.camera.socket)
         source = self.camera.json("GET", SOURCE + "/describe")
         self.assertEqual((source["width"], source["height"]), (640, 360))
         self.assertEqual(source["rtpPort"], self.rtp.port)
