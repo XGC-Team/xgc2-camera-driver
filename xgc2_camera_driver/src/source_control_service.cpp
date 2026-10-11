@@ -25,7 +25,7 @@ constexpr const char* kApiVersion = "v1";
 // The contract bounds a capture to a 32 MiB JPEG and 128 MiB of RGB.
 constexpr std::size_t kResponseLimit = 160U << 20U;
 constexpr std::size_t kJsonLimit = 64U << 10U;
-constexpr auto kPollInterval = std::chrono::milliseconds(10);
+constexpr auto kPollInterval = std::chrono::milliseconds(100);
 constexpr int kMaximumWaitMilliseconds = 30000;
 
 std::vector<std::string> split(const std::string& text, const char separator)
@@ -137,7 +137,7 @@ SourceControlService::SourceControlService(
   limits.header_bytes = 8192;
   limits.request_bytes = kJsonLimit;
   limits.response_bytes = kResponseLimit;
-  limits.request_timeout = std::chrono::seconds(15);
+  limits.request_timeout = std::chrono::seconds(31);
   limits.shutdown_timeout = std::chrono::seconds(3);
   server_.reset(new xgc2::xrpc::HttpServer(
       endpoint,
@@ -151,6 +151,7 @@ SourceControlService::SourceControlService(
     }
   });
   capture_thread_ = std::thread(&SourceControlService::captureWorker, this);
+  deadline_thread_ = std::thread(&SourceControlService::waitForDeadlines, this);
   service_thread_ = std::thread(&SourceControlService::serve, this);
 }
 
@@ -162,9 +163,14 @@ SourceControlService::~SourceControlService()
     std::lock_guard<std::mutex> lock(work_mutex_);
   }
   work_ready_.notify_all();
+  {
+    std::lock_guard<std::mutex> lock(waiters_mutex_);
+  }
+  waiters_changed_.notify_all();
   server_->wake();
   service_thread_.join();
   capture_thread_.join();
+  deadline_thread_.join();
   // Whoever still waits is told the camera is going away.
   {
     std::lock_guard<std::mutex> lock(waiters_mutex_);
@@ -184,7 +190,33 @@ void SourceControlService::serve()
 {
   while (!stopping_.load()) {
     server_->poll(kPollInterval);
-    processWaiters();
+  }
+}
+
+void SourceControlService::waitForDeadlines()
+{
+  std::unique_lock<std::mutex> lock(waiters_mutex_);
+  while (!stopping_.load()) {
+    auto until = Clock::time_point::max();
+    for (const auto& waiter : describe_waiters_) {
+      until = std::min(until, waiter.until);
+    }
+    for (const auto& waiter : fresh_captures_) {
+      until = std::min(until, waiter.until);
+    }
+    const auto revision = waiters_revision_;
+    const auto changed = [this, revision] {
+      return stopping_.load() || waiters_revision_ != revision;
+    };
+    if (until == Clock::time_point::max()) {
+      waiters_changed_.wait(lock, changed);
+    } else if (!waiters_changed_.wait_until(lock, until, changed)) {
+      lock.unlock();
+      server_->wake();
+      lock.lock();
+      // The owner removes expired calls before another deadline is selected.
+      waiters_changed_.wait(lock, changed);
+    }
   }
 }
 
@@ -340,10 +372,12 @@ Json SourceControlService::factsJson() const
       {"source_kind", info.source_kind},
       {"source_id", options_.source_id},
       {"source_open", state_->open()},
+      {"ros_master_uri", info.ros_master_uri},
+      {"ros_master_run_id", info.ros_master_run_id},
       {"frames_flowing",
-       info.source_kind == "still" ? state_->ready()
-                                   : (age != std::chrono::milliseconds::max() &&
-                                      age < std::chrono::seconds(3))},
+       state_->ready() && (info.source_kind == "still" ||
+                          (age != std::chrono::milliseconds::max() &&
+                           age < std::chrono::seconds(3)))},
       {"width", info.width},
       {"height", info.height},
       {"fps", info.fps},
@@ -412,6 +446,8 @@ void SourceControlService::describeService(
   }
   describe_waiters_.push_back(DescribeWaiter{reply, until});
   waiting_.store(describe_waiters_.size() + fresh_captures_.size(), std::memory_order_release);
+  ++waiters_revision_;
+  waiters_changed_.notify_all();
 }
 
 void SourceControlService::describeSource(const HttpReply& reply) const
@@ -642,7 +678,9 @@ void SourceControlService::capture(
         fresh_captures_.push_back(FreshCapture{reply, body, after, until});
         waiting_.store(
             describe_waiters_.size() + fresh_captures_.size(), std::memory_order_release);
+        ++waiters_revision_;
       }
+      waiters_changed_.notify_all();
       server_->wake();
       return;
     }
@@ -703,7 +741,9 @@ void SourceControlService::processWaiters()
       }
     }
     waiting_.store(describe_waiters_.size() + fresh_captures_.size(), std::memory_order_release);
+    ++waiters_revision_;
   }
+  waiters_changed_.notify_all();
   for (const auto& action : actions) {
     action();
   }

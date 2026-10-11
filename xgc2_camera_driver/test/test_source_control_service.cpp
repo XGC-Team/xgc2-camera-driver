@@ -342,6 +342,17 @@ TEST(SourceControlService, ReadinessIsHeldWithoutPollingAndNeverFaked)
   EXPECT_EQ(client.get("/v1/describe?other=1").status, 400);
 }
 
+TEST(SourceControlService, ReadinessWaitCanOutlastFifteenSeconds)
+{
+  Fixture fixture("synthetic", false);
+  Client client(fixture.socket(), "");
+  const auto before = std::chrono::steady_clock::now();
+  const Reply reply = client.call("GET", "/v1/describe?wait_ready_ms=15100", "", 17s);
+  ASSERT_EQ(reply.status, 200);
+  EXPECT_FALSE(reply.json().at("ready").get<bool>());
+  EXPECT_GE(std::chrono::steady_clock::now() - before, 15000ms);
+}
+
 TEST(SourceControlService, SourceDescriptorMatchesWhatMediaEdgeValidates)
 {
   Fixture fixture;

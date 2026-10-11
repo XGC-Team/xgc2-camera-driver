@@ -31,7 +31,6 @@
           "controlSocket": {
             "type": "string",
             "description": "camera-source service socket, created by the supervisor inside its private runtime directory.",
-            "default": "",
             "fixedOnly": true
           },
           "sourceId": {
@@ -128,9 +127,7 @@
             "maximum": 1000000000
           },
           "rosMasterUri": {
-            "type": "string",
-            "default": "http://127.0.0.1:11311",
-            "output": true
+            "type": "string"
           },
           "rosIp": {
             "type": "string",
@@ -174,13 +171,7 @@
             "description": "The media outputs need mjpeg.",
             "default": "mjpeg",
             "enum": [
-              "mjpeg",
-              "yuyv",
-              "uyvy",
-              "rgb24",
-              "bgr24",
-              "nv12",
-              "grey"
+              "mjpeg"
             ]
           },
           "captureMode": {
@@ -280,6 +271,10 @@
               "rosLogDir"
             ]
           }
+        ],
+        "required": [
+          "controlSocket",
+          "rosMasterUri"
         ]
       },
       "command": {

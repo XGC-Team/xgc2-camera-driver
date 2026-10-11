@@ -207,7 +207,7 @@ class ProcessDefinitionTest(unittest.TestCase):
         definition = load("xgc2-camera-still")
         self.assertEqual(
             sorted(definition["parameters"]["required"]),
-            ["stillExtrinsicFile", "stillImage", "stillIntrinsicFile"],
+            ["controlSocket", "rosMasterUri", "stillExtrinsicFile", "stillImage", "stillIntrinsicFile"],
         )
         self.assertNotIn("videoDevice", definition["parameters"]["properties"])
         self.assertNotIn("frameId", definition["parameters"]["properties"])

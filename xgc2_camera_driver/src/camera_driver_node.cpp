@@ -21,7 +21,6 @@
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_updater/diagnostic_updater.h>
 #include <geometry_msgs/TransformStamped.h>
-#include <image_transport/image_transport.h>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ros/ros.h>
@@ -377,7 +376,6 @@ class CameraDriverNode {
   explicit CameraDriverNode(MediaOutputs* media)
       : nh_(),
         private_nh_("~"),
-        image_transport_(nh_),
         media_(media),
         start_wall_time_(ros::WallTime::now())
   {
@@ -403,7 +401,9 @@ class CameraDriverNode {
     // are published once and latched, so any late subscriber receives them
     // without the node resending a megabyte-sized message at the camera rate.
     if (!still) {
-      raw_image_publisher_ = image_transport_.advertise("image_raw", 1);
+      // The native JPEG publisher owns image_raw/compressed. Transport plugins
+      // must not create another publisher for that stream from the raw image.
+      raw_image_publisher_ = nh_.advertise<sensor_msgs::Image>("image_raw", 1);
       frame_timing_publisher_ =
           nh_.advertise<xgc_camera_msgs::FrameTiming>(
               "frame_timing", encoded_queue_capacity_);
@@ -837,7 +837,9 @@ class CameraDriverNode {
       handleEncodedFrame(frame, mapping);
     }
     const bool publish_raw = shouldPublishRaw();
-    if (!native_encoded && !publish_raw &&
+    const bool publish_raw_jpeg = !native_encoded && publish_encoded_ &&
+                                  compressed_image_publisher_.getNumSubscribers() > 0U;
+    if (!native_encoded && !publish_raw && !publish_raw_jpeg &&
         camera_info_publisher_.getNumSubscribers() > 0U) {
       std_msgs::Header header;
       header.seq = static_cast<std::uint32_t>(frame.sequence);
@@ -846,9 +848,9 @@ class CameraDriverNode {
       publishCameraInfo(header);
       notePublished(frame.sequence);
     }
-    if (publish_raw) {
+    if (publish_raw || publish_raw_jpeg) {
       try {
-        publishRawFrame(frame, mapping);
+        publishRawFrame(frame, mapping, publish_raw);
       } catch (const std::exception& error) {
         raw_decode_error_count_.fetch_add(1U);
         setError(std::string("raw decode failed: ") + error.what());
@@ -978,19 +980,35 @@ class CameraDriverNode {
     encoded_queue_ready_.notify_one();
   }
 
-  void publishRawFrame(const SourceFrame& frame, const Mapping& mapping)
+  void publishRawFrame(const SourceFrame& frame, const Mapping& mapping, const bool publish_raw)
   {
-    const cv::Mat image =
-        convertOutput(decodeToBgr(frame), output_encoding_);
+    const cv::Mat bgr = decodeToBgr(frame);
     std_msgs::Header header;
     header.seq = static_cast<std::uint32_t>(frame.sequence);
     header.stamp = rosTimeFromNanoseconds(mapping.ros_time_ns);
     header.frame_id = frame_id_;
-    sensor_msgs::ImagePtr image_message =
-        cv_bridge::CvImage(header, output_encoding_, image).toImageMsg();
-    raw_image_publisher_.publish(image_message);
-    publishCameraInfo(header);
-    raw_frame_count_.fetch_add(1U);
+    if (publish_raw) {
+      const cv::Mat image = convertOutput(bgr, output_encoding_);
+      sensor_msgs::ImagePtr image_message =
+          cv_bridge::CvImage(header, output_encoding_, image).toImageMsg();
+      raw_image_publisher_.publish(image_message);
+      raw_frame_count_.fetch_add(1U);
+    }
+    // Raw onboard cameras retain their compressed ROS output through the same
+    // publisher, without a transport plugin creating a second owner.
+    if (frame.pixel_format != PixelFormat::MJPEG && publish_encoded_ &&
+        compressed_image_publisher_.getNumSubscribers() > 0U) {
+      sensor_msgs::CompressedImage compressed;
+      compressed.header = header;
+      compressed.format = "jpeg";
+      if (!cv::imencode(".jpg", bgr, compressed.data)) {
+        throw std::runtime_error("raw camera JPEG encoding failed");
+      }
+      compressed_image_publisher_.publish(compressed);
+    }
+    if (!publish_encoded_ || frame.pixel_format != PixelFormat::MJPEG) {
+      publishCameraInfo(header);
+    }
     notePublished(frame.sequence);
   }
 
@@ -1282,8 +1300,7 @@ class CameraDriverNode {
 
   ros::NodeHandle nh_;
   ros::NodeHandle private_nh_;
-  image_transport::ImageTransport image_transport_;
-  image_transport::Publisher raw_image_publisher_;
+  ros::Publisher raw_image_publisher_;
   ros::Publisher camera_info_publisher_;
   ros::Publisher compressed_image_publisher_;
   ros::Publisher frame_timing_publisher_;

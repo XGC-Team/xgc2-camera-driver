@@ -77,6 +77,7 @@ class SourceControlService {
       const std::shared_ptr<const CaptureFrame>& frame,
       const xgc2::xrpc::HttpReply& reply);
   void processWaiters();
+  void waitForDeadlines();
   void post(std::function<void()> work);
   void captureWorker();
 
@@ -97,6 +98,8 @@ class SourceControlService {
   std::atomic<bool> capture_in_flight_{false};
   // Held calls, answered by the service thread when their condition arrives.
   std::mutex waiters_mutex_;
+  std::condition_variable waiters_changed_;
+  std::uint64_t waiters_revision_{0};
   std::vector<DescribeWaiter> describe_waiters_;
   std::vector<FreshCapture> fresh_captures_;
   std::atomic<std::size_t> waiting_{0};
@@ -108,6 +111,7 @@ class SourceControlService {
 
   std::thread service_thread_;
   std::thread capture_thread_;
+  std::thread deadline_thread_;
 };
 
 }  // namespace xgc2_camera_driver

@@ -665,6 +665,9 @@ void MediaPipeline::previewStep(const Work& work)
     MediaSource source;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (!config_.preview_enabled || !preview_wanted_) {
+        return;
+      }
       config = config_;
       source = source_;
     }

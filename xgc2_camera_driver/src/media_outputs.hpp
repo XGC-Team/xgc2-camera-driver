@@ -58,6 +58,7 @@ class MediaOutputs {
   void previewSubscribersChanged(int delta);
 
   ros::Publisher preview_publisher_;
+  ros::WallTimer master_monitor_;
   std::atomic<int> preview_subscribers_{0};
   std::mutex frame_id_mutex_;
   std::string frame_id_;

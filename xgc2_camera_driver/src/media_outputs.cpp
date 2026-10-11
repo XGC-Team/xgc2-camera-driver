@@ -97,6 +97,13 @@ MediaOutputsConfig loadMediaOutputsConfig(ros::NodeHandle& nh)
   config.nominal.height = static_cast<std::uint32_t>(std::max(height, 0));
   config.nominal.fps = source_kind == "still" ? pipeline.still_fps : framerate;
   nh.param<std::string>("frame_id", config.nominal.frame_id, "usb_cam_optical_frame");
+  if (!config.control_socket.empty()) {
+    config.nominal.ros_master_uri = ros::master::getURI();
+    if (!ros::param::get("/run_id", config.nominal.ros_master_run_id) ||
+        config.nominal.ros_master_run_id.empty()) {
+      throw std::runtime_error("the camera-source service needs a bound ROS master run id");
+    }
+  }
   return config;
 }
 
@@ -107,6 +114,9 @@ MediaOutputs::MediaOutputs(ros::NodeHandle& nh, MediaOutputsConfig config)
   pipeline_.reset(new MediaPipeline(
       config.pipeline,
       [this](PreviewUnit&& unit) {
+        if (preview_subscribers_.load() <= 0) {
+          return;
+        }
         foxglove_msgs::CompressedVideo message;
         message.timestamp.fromNSec(static_cast<std::uint64_t>(std::max<std::int64_t>(unit.ros_time_ns, 0)));
         {
@@ -146,6 +156,16 @@ MediaOutputs::MediaOutputs(ros::NodeHandle& nh, MediaOutputsConfig config)
     options.target_id = config.target_id;
     options.source_id = config.source_id;
     service_.reset(new SourceControlService(options, pipeline_.get(), &state_));
+    master_monitor_ = nh.createWallTimer(
+        ros::WallDuration(1.0),
+        [this, run_id = config.nominal.ros_master_run_id](const ros::WallTimerEvent&) {
+          std::string current;
+          if (!ros::param::get("/run_id", current) || current != run_id) {
+            state_.sourceClosed("the bound ROS master is unavailable or replaced");
+            ROS_FATAL("XGC2 camera lost its bound ROS master; stopping");
+            ros::shutdown();
+          }
+        });
     ROS_INFO_STREAM(
         "XGC2 camera-source service on " << config.control_socket
                                          << " instance=" << service_->instanceId());
@@ -154,6 +174,7 @@ MediaOutputs::MediaOutputs(ros::NodeHandle& nh, MediaOutputsConfig config)
 
 MediaOutputs::~MediaOutputs()
 {
+  master_monitor_.stop();
   // The service stops serving before the pipeline it controls goes away; the
   // pipeline stops publishing before the publisher it uses goes away.
   service_.reset();
@@ -182,7 +203,11 @@ void MediaOutputs::sourceOpened(const SourceInfo& info)
   source.fps = info.fps;
   source.still = info.source_kind == "still";
   pipeline_->setSource(source);
-  state_.sourceOpened(info);
+  SourceInfo bound = info;
+  const SourceInfo previous = state_.info();
+  bound.ros_master_uri = previous.ros_master_uri;
+  bound.ros_master_run_id = previous.ros_master_run_id;
+  state_.sourceOpened(bound);
 }
 
 void MediaOutputs::sourceClosed(const std::string& reason)

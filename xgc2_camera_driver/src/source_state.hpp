@@ -15,6 +15,8 @@ namespace xgc2_camera_driver {
 struct SourceInfo {
   std::string source_kind;  // v4l2, still or synthetic
   std::string frame_id;
+  std::string ros_master_uri;
+  std::string ros_master_run_id;
   std::uint32_t width{0};
   std::uint32_t height{0};
   // Nominal cadence; for a still the rate at which the stream is refreshed.
@@ -47,7 +49,7 @@ class SourceState {
 
   // The source is open: actual geometry and calibration replace the nominal.
   void sourceOpened(const SourceInfo& info);
-  // The source is lost; ready until it reopens and delivers a frame.
+  // The source is lost; not ready until it reopens and delivers a frame.
   void sourceClosed(const std::string& reason);
   void framePublished(std::shared_ptr<const CaptureFrame> frame);
 
