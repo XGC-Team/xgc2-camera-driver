@@ -9,6 +9,61 @@ physical camera path, not a configured fallback. RViz,
 Lichtblick, calibration snapshots, and scientific bags must retain those source
 dimensions; 1080p or 720p is not a successful fallback.
 
+## Media outputs
+
+The node serves the two consumers that watch the camera, and works only while
+somebody watches. They are built on Ubuntu 20.04 and newer, where FFmpeg, the
+XRPC `http.v1` server and `foxglove_msgs` are available; a Melodic build is the
+ROS-only camera and rejects `control_socket`.
+
+| Consumer | Input | Output | Runs |
+| --- | --- | --- | --- |
+| media-edge (browser WebRTC) | XRPC lease on the camera-source service | H.264/RTP to `rtp_host:rtp_port` (loopback) | between `start` and `stop` |
+| Lichtblick ImageMode | subscribers of `video_h264` | `foxglove_msgs/CompressedVideo`, at most 1920x1080 | while the topic has subscribers |
+
+Every captured JPEG is decoded once; the picture is shared by both encoders. The
+encoder is `h264_encoder`: `h264_nvenc` prefers the NVIDIA hardware encoder and
+falls back to `libx264` when it cannot be opened (the reason is in the log, in
+`status.native.encoder_fallback` and in the describe facts); `libx264` never
+tries the hardware. `h264_bitrate`, `h264_preset` (x264), `h264_gop_seconds`,
+`h264_rate_control` (`bitrate`, `quality` or `auto`: quality for a still) and
+`h264_quality` (CRF/CQ) tune the RTP encode; `preview_*` tune the preview. Media
+needs an MJPEG camera (or a still, or the synthetic source) with even
+dimensions. media-edge needs `net.core.rmem_max >= 8 MiB` for the RTP socket.
+
+A still scene is encoded as one IDR; the node decodes that IDR and feeds the
+reconstruction back as input, so every following picture (one per `1 /
+still_fps` seconds) is a run of skip macroblocks. A new viewer costs one IDR
+(`request-keyframe` is answered at once, not at the next picture) and the idle
+stream is a few bytes per second. `still_gop_seconds` bounds how long a viewer
+that lost a packet waits for the next IDR.
+
+### camera-source service
+
+`control_socket` is the absolute path of the service socket inside an owned
+0700 directory; the supervisor passes it on the command line. An empty value
+serves no media-edge. The service implements the media-edge
+[source-control contract](https://github.com/XGC-Team/xgc2-media-edge/blob/main/contracts/source-control-v1.md)
+for the single source `source_id` (default: the camera name).
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /v1/describe` | service discovery (unfenced): `service`, `api_version`, `instance_id`, `ready`, `facts`, `service_ref`, `sources` |
+| `GET /v1/describe?wait_ready_ms=N` | holds the call, without polling, until the source is open and has captured a picture or `N` ms (at most 30000) pass |
+| `GET .../describe` | descriptor: H264, payload 96, 90 kHz, destination, geometry, `fps` (for a still, `still_fps`), `frameId`, capabilities, force-IDR |
+| `GET .../status` | `idle`, `starting`, `active`, `stopping` or `faulted`, desired/applied active, revisions, native counters |
+| `POST .../start`, `.../stop` | applied receipts: `start` completes when the first access unit has been sent; both are idempotent; `start` of a source that is not ready fails |
+| `POST .../request-keyframe` | the next picture is a real IDR with SPS and PPS |
+| `POST .../capture` | `multipart/mixed`: metadata, the camera JPEG and optionally the exact RGB8 of the same frame; `requireFresh` waits for a picture after admission |
+| `GET\|PATCH .../config` | `rtp_host`, `rtp_port`, `bitrate`; revisioned, ephemeral, applied only while idle |
+
+Ready means the source is open and has captured a picture (a still: the image
+is loaded), not that the process is alive. When the camera is unplugged the
+service stays up with its socket and instance identity and reports
+`ready:false` with the reason until the device returns. Only a real calibration
+travels with a capture (`calibrationState: available`); an uncalibrated camera
+reports `unavailable` and the node never invents intrinsics.
+
 ## Topic contract
 
 For a node launched below namespace `/usb_cam`:
@@ -20,10 +75,15 @@ For a node launched below namespace `/usb_cam`:
 | `/usb_cam/frame_timing` | `xgc_camera_msgs/FrameTiming` | Native source, dequeue, mapped ROS, epoch, drop, and keyframe timing |
 | `/usb_cam/stream_info` | `xgc_camera_msgs/StreamInfo` | Latched codec, geometry, clock-domain, and transport contract |
 | `/usb_cam/image_raw` | `sensor_msgs/Image` | Optional decoded image for local algorithms |
+| `/usb_cam/video_h264` | `foxglove_msgs/CompressedVideo` | 1080p H.264 preview for Lichtblick, encoded only while subscribed (media outputs) |
 
 `raw_publish_mode=on_demand` is the default. MJPEG is decoded only while
 `/image_raw` has a subscriber. `always` publishes every frame and `never`
 guarantees that the capture process never pays raw decode cost.
+
+For `source_kind: still`, `image_raw/compressed`, `camera_info` and `stream_info`
+are published once and latched, the static TF is on `/tf_static`, and neither
+`frame_timing` nor `image_raw` exists.
 
 The shipped camera configuration uses `pixel_format: mjpeg`, so its native
 source-quality topic is `/usb_cam/image_raw/compressed`. Native camera H.264

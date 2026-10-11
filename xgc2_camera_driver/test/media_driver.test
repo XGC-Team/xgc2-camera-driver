@@ -1,0 +1,14 @@
+<launch>
+  <!-- The tests start the camera processes themselves so that they own their
+       private runtime directories, as the process supervisor does. -->
+  <test test-name="media_camera_contract_synthetic"
+        pkg="xgc2_camera_driver"
+        type="test_media_driver.py"
+        args="synthetic"
+        time-limit="120" />
+  <test test-name="media_camera_contract_still"
+        pkg="xgc2_camera_driver"
+        type="test_media_driver.py"
+        args="still"
+        time-limit="120" />
+</launch>

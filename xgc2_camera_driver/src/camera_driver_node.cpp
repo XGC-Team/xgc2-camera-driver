@@ -42,6 +42,10 @@
 #include "source_frame.hpp"
 #include "still_asset.hpp"
 
+#ifdef XGC2_CAMERA_MEDIA
+#include "media_outputs.hpp"
+#endif
+
 namespace {
 
 using xgc2::camera::PixelFormat;
@@ -360,12 +364,21 @@ geometry_msgs::TransformStamped toTransformMessage(
   return message;
 }
 
+#ifdef XGC2_CAMERA_MEDIA
+using MediaOutputs = xgc2_camera_driver::MediaOutputs;
+#else
+class MediaOutputs;  // the H.264/RTP outputs are not part of this build
+#endif
+
 class CameraDriverNode {
  public:
-  CameraDriverNode()
+  // `media` outlives the node: it keeps the camera-source service and its
+  // socket across reopenings of the device.
+  explicit CameraDriverNode(MediaOutputs* media)
       : nh_(),
         private_nh_("~"),
         image_transport_(nh_),
+        media_(media),
         start_wall_time_(ros::WallTime::now())
   {
     loadParameters();
@@ -417,6 +430,7 @@ class CameraDriverNode {
       source_->stop();
     }
     stopPublisher();
+    mediaClosed("the camera node stopped");
   }
 
   int run()
@@ -442,6 +456,7 @@ class CameraDriverNode {
     source_->start();
     startPublisher();
     running_.store(true);
+    mediaOpened();
     while (ros::ok()) {
       try {
         const SourceFrame frame = source_->read(capture_timeout_ms_);
@@ -504,6 +519,7 @@ class CameraDriverNode {
     private_nh_.param<std::string>(
         "still_extrinsic_file", still_extrinsic_file_, "");
     private_nh_.param("still_jpeg_quality", still_jpeg_quality_, 95);
+    private_nh_.param("still_fps", still_fps_, 1.0);
     private_nh_.param<std::string>(
         "raw_publish_mode", raw_publish_mode, "on_demand");
     private_nh_.param<std::string>(
@@ -706,6 +722,81 @@ class CameraDriverNode {
     encoded_frame_count_.fetch_add(1U);
     encoded_bytes_count_.fetch_add(still_.jpeg.size());
     notePublished(0U);
+    mediaOpened();
+    mediaStill(static_cast<std::int64_t>(stamp.toNSec()));
+  }
+
+  // Description of the picture source for the camera-source service.
+  xgc2_camera_driver::SourceInfo sourceInfo() const
+  {
+    const bool still = source_kind_ == SourceKind::Still;
+    xgc2_camera_driver::SourceInfo info;
+    info.source_kind = source_kind_name_;
+    info.frame_id = frame_id_;
+    info.width = width_;
+    info.height = height_;
+    info.fps = still ? still_fps_ : framerate_;
+    info.clock_domain = still && ros::Time::isSimTime() ? "simulation" : "system_realtime";
+    if (still) {
+      info.calibrated = true;
+      info.camera_matrix = still_intrinsics_.camera_matrix;
+      info.distortion = still_intrinsics_.distortion;
+    } else if (camera_info_manager_ && camera_info_manager_->isCalibrated()) {
+      const sensor_msgs::CameraInfo calibration = camera_info_manager_->getCameraInfo();
+      std::copy(calibration.K.begin(), calibration.K.end(), info.camera_matrix.begin());
+      info.distortion = calibration.D;
+      info.calibrated = true;
+    }
+    // Only a real calibration travels with a capture; a distortion vector
+    // outside the 4..16 range the contract allows is no calibration at all.
+    if (info.distortion.size() < 4U || info.distortion.size() > 16U) {
+      info.calibrated = false;
+      info.distortion.clear();
+    }
+    return info;
+  }
+
+  void mediaOpened()
+  {
+#ifdef XGC2_CAMERA_MEDIA
+    if (media_) {
+      media_->sourceOpened(sourceInfo());
+    }
+#endif
+  }
+
+  void mediaFrame(const SourceFrame& frame, const std::int64_t ros_time_ns)
+  {
+#ifdef XGC2_CAMERA_MEDIA
+    if (media_) {
+      media_->frameCaptured(frame, ros_time_ns);
+    }
+#else
+    (void)frame;
+    (void)ros_time_ns;
+#endif
+  }
+
+  void mediaStill(const std::int64_t ros_time_ns)
+  {
+#ifdef XGC2_CAMERA_MEDIA
+    if (media_) {
+      media_->stillLoaded(still_.jpeg, still_.width, still_.height, ros_time_ns);
+    }
+#else
+    (void)ros_time_ns;
+#endif
+  }
+
+  void mediaClosed(const std::string& reason)
+  {
+#ifdef XGC2_CAMERA_MEDIA
+    if (media_) {
+      media_->sourceClosed(reason);
+    }
+#else
+    (void)reason;
+#endif
   }
 
   bool shouldPublishRaw() const
@@ -737,6 +828,7 @@ class CameraDriverNode {
       return;
     }
     clearError();
+    mediaFrame(frame, mapping.ros_time_ns);
 
     const bool native_encoded = frame.pixel_format == PixelFormat::MJPEG;
     if (publish_encoded_ && native_encoded) {
@@ -1215,6 +1307,8 @@ class CameraDriverNode {
   std::string still_intrinsic_file_;
   std::string still_extrinsic_file_;
   int still_jpeg_quality_{95};
+  double still_fps_{1.0};
+  MediaOutputs* media_{nullptr};
   xgc2_camera_driver::Intrinsics still_intrinsics_;
   xgc2_camera_driver::CameraStaticTransforms still_transforms_;
   xgc2_camera_driver::StillImage still_;
@@ -1283,12 +1377,32 @@ int main(int argc, char** argv)
   ros::AsyncSpinner spinner(1);
   spinner.start();
 
+  ros::NodeHandle nh;
   ros::NodeHandle private_nh("~");
   std::string source_kind;
   private_nh.param<std::string>("source_kind", source_kind, "v4l2");
+
+  // The media outputs outlive every opening of the device: the camera-source
+  // service keeps its socket and instance identity while a camera is unplugged.
+  std::unique_ptr<MediaOutputs> media;
+#ifdef XGC2_CAMERA_MEDIA
+  try {
+    media.reset(new MediaOutputs(nh, xgc2_camera_driver::loadMediaOutputsConfig(private_nh)));
+  } catch (const std::exception& error) {
+    ROS_FATAL_STREAM("XGC2 camera media outputs failed: " << error.what());
+    return 1;
+  }
+#else
+  std::string control_socket;
+  private_nh.param<std::string>("control_socket", control_socket, "");
+  if (!control_socket.empty()) {
+    ROS_FATAL("this build has no camera-source service; control_socket must be empty");
+    return 1;
+  }
+#endif
   while (ros::ok()) {
     try {
-      CameraDriverNode node;
+      CameraDriverNode node(media.get());
       return node.run();
     } catch (const xgc2::camera::CameraError& error) {
       if (source_kind != "v4l2") {
@@ -1296,6 +1410,9 @@ int main(int argc, char** argv)
             "XGC2 camera driver failed: " << error.what());
         return 1;
       }
+#ifdef XGC2_CAMERA_MEDIA
+      media->sourceClosed(std::string("the camera is unavailable: ") + error.what());
+#endif
       ROS_WARN_STREAM_THROTTLE(
           10.0,
           "XGC2 camera is unavailable; retaining the configured device and "

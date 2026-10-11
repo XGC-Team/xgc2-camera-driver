@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 project(xgc2_camera_driver VERSION 0.1.0 LANGUAGES CXX)
 
-find_package(catkin REQUIRED COMPONENTS
+set(CAMERA_CATKIN_COMPONENTS
   camera_info_manager
   cv_bridge
   diagnostic_msgs
@@ -13,27 +13,32 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
   xgc_camera_msgs
 )
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
-find_package(Threads REQUIRED)
-find_package(yaml-cpp REQUIRED)
-find_package(xgc2_camera CONFIG REQUIRED)
 
-# The H.264/RTP media outputs need FFmpeg and the XRPC http.v1 server, which
-# exists for Ubuntu 20.04 and newer. Older robots keep the ROS-only camera.
+# The H.264/RTP media outputs need FFmpeg, the XRPC http.v1 server (Ubuntu 20.04
+# and newer) and the foxglove_msgs interface of the preview. Older robots keep
+# the ROS-only camera.
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
   pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET libavcodec libavutil libswscale)
 endif()
 find_package(XgcXrpc QUIET COMPONENTS http json_http)
-if(FFMPEG_FOUND AND XgcXrpc_FOUND)
+find_package(foxglove_msgs QUIET)
+if(FFMPEG_FOUND AND XgcXrpc_FOUND AND foxglove_msgs_FOUND)
   set(XGC2_CAMERA_MEDIA TRUE)
+  list(APPEND CAMERA_CATKIN_COMPONENTS foxglove_msgs)
 else()
   set(XGC2_CAMERA_MEDIA FALSE)
-  message(STATUS "xgc2_camera_driver: media outputs disabled (FFmpeg and XgcXrpc http/json_http are required)")
+  message(STATUS "xgc2_camera_driver: media outputs disabled (FFmpeg, XgcXrpc http/json_http and foxglove_msgs are required)")
 endif()
 
+find_package(catkin REQUIRED COMPONENTS ${CAMERA_CATKIN_COMPONENTS})
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
+find_package(Threads REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(xgc2_camera CONFIG REQUIRED)
+
 catkin_package(
-  CATKIN_DEPENDS camera_info_manager cv_bridge diagnostic_msgs diagnostic_updater geometry_msgs image_transport roscpp sensor_msgs tf2_ros xgc_camera_msgs
+  CATKIN_DEPENDS ${CAMERA_CATKIN_COMPONENTS}
   DEPENDS OpenCV
 )
 
@@ -44,7 +49,23 @@ add_executable(xgc2_camera_driver_node
   src/still_asset.cpp
 )
 add_dependencies(xgc2_camera_driver_node ${catkin_EXPORTED_TARGETS})
-target_compile_features(xgc2_camera_driver_node PRIVATE cxx_std_14)
+if(XGC2_CAMERA_MEDIA)
+  target_sources(xgc2_camera_driver_node PRIVATE
+    src/h264_decoder.cpp
+    src/h264_encoder.cpp
+    src/jpeg_decoder.cpp
+    src/media_outputs.cpp
+    src/media_pipeline.cpp
+    src/rtp_h264.cpp
+    src/source_control_service.cpp
+    src/source_state.cpp
+  )
+  target_compile_definitions(xgc2_camera_driver_node PRIVATE XGC2_CAMERA_MEDIA=1)
+  target_compile_features(xgc2_camera_driver_node PRIVATE cxx_std_17)
+  target_link_libraries(xgc2_camera_driver_node PRIVATE XgcXrpc::json_http PkgConfig::FFMPEG)
+else()
+  target_compile_features(xgc2_camera_driver_node PRIVATE cxx_std_14)
+endif()
 target_compile_options(xgc2_camera_driver_node PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(xgc2_camera_driver_node
   PRIVATE
@@ -164,5 +185,8 @@ if(CATKIN_ENABLE_TESTING)
   if(NOT "$ENV{ROS_DISTRO}" STREQUAL "melodic")
     add_rostest(test/synthetic_driver.test)
     add_rostest(test/still_driver.test)
+    if(XGC2_CAMERA_MEDIA)
+      add_rostest(test/media_driver.test)
+    endif()
   endif()
 endif()

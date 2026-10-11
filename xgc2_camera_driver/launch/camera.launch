@@ -24,6 +24,15 @@
   <arg name="still_image" default="" />
   <arg name="still_intrinsic_file" default="" />
   <arg name="still_extrinsic_file" default="" />
+  <!-- H.264 media outputs (Ubuntu 20.04 and newer): the camera-source service for
+       media-edge and the ROS preview. An empty control_socket serves no
+       media-edge; the preview still follows its topic subscribers. -->
+  <arg name="control_socket" default="" />
+  <arg name="source_id" default="$(arg camera_name)" />
+  <arg name="rtp_port" default="5004" />
+  <arg name="h264_encoder" default="h264_nvenc" />
+  <arg name="still_fps" default="1.0" />
+  <arg name="preview_enabled" default="true" />
   <arg name="respawn" default="false" />
 
   <group ns="$(arg camera_ns)">
@@ -55,6 +64,12 @@
       <param name="still_image" value="$(arg still_image)" />
       <param name="still_intrinsic_file" value="$(arg still_intrinsic_file)" />
       <param name="still_extrinsic_file" value="$(arg still_extrinsic_file)" />
+      <param name="control_socket" value="$(arg control_socket)" />
+      <param name="source_id" value="$(arg source_id)" />
+      <param name="rtp_port" value="$(arg rtp_port)" />
+      <param name="h264_encoder" value="$(arg h264_encoder)" />
+      <param name="still_fps" value="$(arg still_fps)" />
+      <param name="preview_enabled" value="$(arg preview_enabled)" />
     </node>
   </group>
 </launch>
