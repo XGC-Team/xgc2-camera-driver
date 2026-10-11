@@ -97,7 +97,7 @@ class Rendered:
             self.log.append(line.decode("utf-8", "replace"))
 
     def call(self, target, timeout_ms=8000):
-        status, _, data = call(self.socket, "GET", target, instance=self.instance, timeout_ms=timeout_ms)
+        status, _, data = call(self.socket, "GET", target, timeout_ms=timeout_ms)
         return status, json.loads(data)
 
     def wait_for_service(self, timeout=20.0):
@@ -135,10 +135,16 @@ class ProcessDefinitionTest(unittest.TestCase):
     def test_shape_and_identity(self):
         for name in self.NAMES:
             definition = load(name)
+            self.assertLessEqual(set(definition), {
+                "id", "version", "label", "description", "parameters", "setupFiles",
+                "command", "services", "readiness", "stop", "logs",
+            })
             self.assertEqual(definition["id"], name)
-            self.assertEqual(definition["drivers"], ["host"])
-            self.assertEqual(definition["readiness"]["kind"], "describe")
-            self.assertEqual(definition["restart"]["mode"], "never")
+            self.assertEqual(definition["version"], "1.1.0")
+            self.assertEqual(definition["readiness"], {
+                "kind": "describe", "startGraceMs": 15000, "timeoutMs": 30000,
+            })
+            self.assertEqual(definition["stop"], {"graceMs": 5000})
             self.assertEqual(definition["command"]["executable"],
                              "/opt/ros/noetic/lib/xgc2_camera_driver/xgc2_camera_driver_node")
             self.assertFalse(definition["parameters"]["additionalProperties"])
@@ -148,12 +154,12 @@ class ProcessDefinitionTest(unittest.TestCase):
         for name in self.NAMES:
             definition = load(name)
             (service,) = definition["services"]
-            self.assertEqual(service["service"], "camera-source")
-            self.assertEqual(service["api_version"], "v1")
-            self.assertEqual(service["profile"], "http.v1")
-            self.assertEqual(service["describePath"], "/v1/describe")
+            self.assertEqual(service, {
+                "service": "camera-source", "api_version": "v1", "profile": "http.v1",
+                "endpointParameter": "controlSocket",
+            })
             endpoint = definition["parameters"]["properties"][service["endpointParameter"]]
-            self.assertEqual(endpoint["ownedEndpoint"], "unix-socket")
+            self.assertNotIn("ownedEndpoint", endpoint)
             self.assertTrue(endpoint["fixedOnly"])
             self.assertEqual(endpoint["type"], "string")
             self.assertIn("_control_socket:=${%s}" % service["endpointParameter"], definition["command"]["args"])

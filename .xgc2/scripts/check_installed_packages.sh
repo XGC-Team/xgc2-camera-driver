@@ -18,7 +18,23 @@ import sys
 
 document = json.load(open(sys.argv[1], encoding="utf-8"))
 assert document["apiVersion"] == "xgc.execution.process/v1"
-assert document["definitions"][0]["id"] == sys.argv[2]
+(definition,) = document["definitions"]
+assert set(definition) <= {
+    "id", "version", "label", "description", "parameters", "setupFiles",
+    "command", "services", "readiness", "stop", "logs",
+}
+assert definition["id"] == sys.argv[2]
+assert definition["version"] == "1.1.0"
+assert definition["readiness"] == {
+    "kind": "describe", "startGraceMs": 15000, "timeoutMs": 30000,
+}
+assert definition["stop"] == {"graceMs": 5000}
+assert definition["services"] == [{
+    "service": "camera-source", "api_version": "v1", "profile": "http.v1",
+    "endpointParameter": "controlSocket",
+}]
+endpoint = definition["parameters"]["properties"]["controlSocket"]
+assert endpoint["fixedOnly"] is True and "ownedEndpoint" not in endpoint
 PY
   done
 fi
@@ -100,7 +116,7 @@ def get(target, instance=None):
 
 status, discovery = get("/v1/describe")
 assert status == 200 and discovery["service"] == "camera-source", discovery
-status, ready = get("/v1/describe?wait_ready_ms=15000", discovery["instance_id"])
+status, ready = get("/v1/describe?wait_ready_ms=15000")
 assert status == 200 and ready["ready"] is True, ready
 status, source = get("/v1/media/sources/usb_cam/describe", discovery["instance_id"])
 assert status == 200 and source["codec"] == "H264" and source["width"] == 320, source

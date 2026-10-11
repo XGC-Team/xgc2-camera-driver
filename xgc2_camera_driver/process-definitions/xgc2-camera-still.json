@@ -3,12 +3,9 @@
   "definitions": [
     {
       "id": "xgc2-camera-still",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "label": "XGC2 camera (sealed still scene)",
       "description": "One camera node for a sealed scene image with its intrinsics and extrinsics. The JPEG, CameraInfo and stream description are published once, latched, with the static TF chain of the physical camera; nothing is re-sent periodically. The camera-source service encodes the scene as one IDR per viewer join followed by skip pictures at stillFps, so a static scene costs a few bytes per second instead of a camera-rate JPEG stream. Ready means the image is loaded and published.",
-      "drivers": [
-        "host"
-      ],
       "parameters": {
         "properties": {
           "nodeName": {
@@ -30,8 +27,7 @@
             "type": "string",
             "description": "camera-source service socket, created by the supervisor inside its private runtime directory.",
             "default": "",
-            "fixedOnly": true,
-            "ownedEndpoint": "unix-socket"
+            "fixedOnly": true
           },
           "sourceId": {
             "type": "string",
@@ -279,36 +275,20 @@
       },
       "readiness": {
         "kind": "describe",
-        "interval": 1000000000,
-        "timeout": 30000000000,
-        "successThreshold": 1,
-        "failureThreshold": 1
-      },
-      "liveness": {
-        "kind": "process",
-        "interval": 5000000000,
-        "timeout": 1000000000,
-        "successThreshold": 1,
-        "failureThreshold": 3
+        "startGraceMs": 15000,
+        "timeoutMs": 30000
       },
       "stop": {
-        "gracePeriod": 5000000000
-      },
-      "restart": {
-        "mode": "never",
-        "maxRestarts": 0,
-        "backoff": 0
+        "graceMs": 5000
       },
       "services": [
         {
           "service": "camera-source",
           "api_version": "v1",
           "profile": "http.v1",
-          "endpointParameter": "controlSocket",
-          "describePath": "/v1/describe"
+          "endpointParameter": "controlSocket"
         }
-      ],
-      "digest": ""
+      ]
     }
   ]
 }

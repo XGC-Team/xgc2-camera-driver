@@ -3,12 +3,9 @@
   "definitions": [
     {
       "id": "xgc2-camera-v4l2",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "label": "XGC2 camera (V4L2)",
       "description": "One camera node for a V4L2 MJPEG device. It publishes the camera contract on ROS (image_raw/compressed, camera_info, frame_timing, latched stream_info) and serves the media-edge camera-source service: ready means the device is open and has delivered a picture, H.264/RTP is encoded only while media-edge holds a lease, and the 1080p preview only while its topic has subscribers. The node keeps waiting for an unplugged camera.",
-      "drivers": [
-        "host"
-      ],
       "parameters": {
         "properties": {
           "nodeName": {
@@ -35,8 +32,7 @@
             "type": "string",
             "description": "camera-source service socket, created by the supervisor inside its private runtime directory.",
             "default": "",
-            "fixedOnly": true,
-            "ownedEndpoint": "unix-socket"
+            "fixedOnly": true
           },
           "sourceId": {
             "type": "string",
@@ -339,36 +335,20 @@
       },
       "readiness": {
         "kind": "describe",
-        "interval": 1000000000,
-        "timeout": 30000000000,
-        "successThreshold": 1,
-        "failureThreshold": 1
-      },
-      "liveness": {
-        "kind": "process",
-        "interval": 5000000000,
-        "timeout": 1000000000,
-        "successThreshold": 1,
-        "failureThreshold": 3
+        "startGraceMs": 15000,
+        "timeoutMs": 30000
       },
       "stop": {
-        "gracePeriod": 5000000000
-      },
-      "restart": {
-        "mode": "never",
-        "maxRestarts": 0,
-        "backoff": 0
+        "graceMs": 5000
       },
       "services": [
         {
           "service": "camera-source",
           "api_version": "v1",
           "profile": "http.v1",
-          "endpointParameter": "controlSocket",
-          "describePath": "/v1/describe"
+          "endpointParameter": "controlSocket"
         }
-      ],
-      "digest": ""
+      ]
     }
   ]
 }

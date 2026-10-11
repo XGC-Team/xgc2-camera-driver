@@ -119,6 +119,13 @@ that is alive but has no picture is not ready. Core passes the socket path on th
 command line; media-edge is configured with the same RTP port and source id and
 leases the stream over that socket.
 
+Both definitions are version 1.1.0 in the `xgc.execution.process/v1` format.
+The declared service's `endpointParameter: controlSocket` tells the supervisor
+to allocate the private Unix socket; that parameter is `fixedOnly`. Readiness
+uses `kind: describe`, `startGraceMs: 15000` and `timeoutMs: 30000`, including
+unfenced readiness queries. Stop has `graceMs: 5000` and sends process signals
+within that budget; camera-source has no shutdown RPC.
+
 ## Calibration
 
 General intrinsic calibration and fixed-world-camera extrinsic calibration are
