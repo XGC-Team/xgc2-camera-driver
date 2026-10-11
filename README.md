@@ -108,6 +108,34 @@ roslaunch xgc2_camera_driver camera.launch \
   source_kind:=synthetic width:=320 height:=240 framerate:=10
 ```
 
+## Measured transport
+
+Measured on 2026-10-10 on a shared Ubuntu 20.04 x86_64 machine (8-core Intel
+Xeon, 15 GiB RAM); sampled one-minute load was 2.22–10.59, including the runs.
+The source was 3840x2160: a scene PNG resampled from a 1920x1080 photo, or an
+8-frame synthetic MJPEG pattern at 30 Hz (JPEG quality 90, noise sigma 3).
+RTP used libx264 `veryfast`, 25 Mbit/s, preview disabled; the still used CRF 23,
+1 Hz and a 30-second GOP. Each window requested 60 seconds; rates use the
+actual elapsed time (60.0–60.3 seconds), and CPU is the camera process's
+`/proc/<pid>/stat` user + system CPU-time delta.
+
+| Case | ROS image bytes/s | RTP bytes/s | Camera CPU seconds |
+| --- | ---: | ---: | ---: |
+| Retired replay (provided reference) | 32,000,000 | — | — |
+| Still, no viewer | 0 | 0 | 0.12 |
+| Still, one viewer | 0 | 84,885 | 3.74 |
+| Still, join/leave (two 20-second leases) | 0 | 24,652 | 2.71 |
+| Synthetic, 30 Hz source, one viewer | 27,147,685 | 1,898,942 | 153.27 |
+
+ROS counts serialized `image_raw/compressed` bytes for one subscriber. The
+still delivered one latched 1,731,035-byte message before the windows and no
+recurring messages; `rostopic bw` has too few samples to print a rate, so a
+serialized-message counter confirmed zero recurring traffic. RTP counts UDP
+payload bytes, including RTP headers. Viewers were represented by XRPC
+`start`/`stop` leases and a loopback UDP collector. No RTP sequence gaps were observed;
+the still's skip pictures used 435 B/s between IDRs. Under the synthetic
+run's load, ROS delivered 30.0 Hz and RTP 17.8 Hz (730 media frames dropped).
+
 ## Automation
 
 The Ubuntu 20.04 package installs two process definitions in
