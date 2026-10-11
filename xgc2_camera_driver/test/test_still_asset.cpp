@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 
@@ -15,11 +16,22 @@ namespace driver = xgc2_camera_driver;
 
 namespace {
 
+// googletest 1.8.0 (Ubuntu 18.04) has no testing::TempDir().
+std::string temporaryRoot()
+{
+  const char* configured = std::getenv("TMPDIR");
+  std::string root = (configured != nullptr && *configured != '\0') ? configured : "/tmp";
+  if (root.back() != '/') {
+    root.push_back('/');
+  }
+  return root;
+}
+
 // One private directory per test run, removed when the run ends.
 std::string testDirectory()
 {
   static const std::string directory = [] {
-    std::string pattern = testing::TempDir() + "xgc2_still_asset_XXXXXX";
+    std::string pattern = temporaryRoot() + "xgc2_still_asset_XXXXXX";
     if (::mkdtemp(&pattern[0]) == nullptr) {
       throw std::runtime_error("cannot create a test directory");
     }
