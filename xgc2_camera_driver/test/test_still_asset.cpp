@@ -15,10 +15,42 @@ namespace driver = xgc2_camera_driver;
 
 namespace {
 
+// One private directory per test run, removed when the run ends.
+std::string testDirectory()
+{
+  static const std::string directory = [] {
+    std::string pattern = testing::TempDir() + "xgc2_still_asset_XXXXXX";
+    if (::mkdtemp(&pattern[0]) == nullptr) {
+      throw std::runtime_error("cannot create a test directory");
+    }
+    return pattern;
+  }();
+  return directory;
+}
+
+std::vector<std::string>& createdFiles()
+{
+  static std::vector<std::string> files;
+  return files;
+}
+
 std::string temporaryPath(const std::string& name)
 {
-  return testing::TempDir() + "xgc2_still_asset_" + std::to_string(::getpid()) + "_" + name;
+  const std::string path = testDirectory() + "/" + name;
+  createdFiles().push_back(path);
+  return path;
 }
+
+class RemoveTestDirectory : public ::testing::Environment {
+ public:
+  void TearDown() override
+  {
+    for (const std::string& path : createdFiles()) {
+      std::remove(path.c_str());
+    }
+    ::rmdir(testDirectory().c_str());
+  }
+};
 
 std::string writeFile(const std::string& name, const std::string& content)
 {
@@ -265,5 +297,6 @@ TEST_F(StillImageTest, RejectsMismatchesAndBadFiles)
 int main(int argc, char** argv)
 {
   testing::InitGoogleTest(&argc, argv);
+  testing::AddGlobalTestEnvironment(new RemoveTestDirectory());
   return RUN_ALL_TESTS();
 }

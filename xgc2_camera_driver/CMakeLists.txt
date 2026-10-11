@@ -117,6 +117,35 @@ if(CATKIN_ENABLE_TESTING)
       target_include_directories(test_h264_encoder PRIVATE src test ${OpenCV_INCLUDE_DIRS})
       target_link_libraries(test_h264_encoder PkgConfig::FFMPEG ${OpenCV_LIBRARIES})
     endif()
+    catkin_add_gtest(test_media_pipeline
+      test/test_media_pipeline.cpp
+      src/h264_decoder.cpp
+      src/h264_encoder.cpp
+      src/jpeg_decoder.cpp
+      src/media_pipeline.cpp
+      src/rtp_h264.cpp
+    )
+    if(TARGET test_media_pipeline)
+      target_compile_features(test_media_pipeline PRIVATE cxx_std_14)
+      target_include_directories(test_media_pipeline PRIVATE src test ${OpenCV_INCLUDE_DIRS})
+      target_link_libraries(test_media_pipeline PkgConfig::FFMPEG ${OpenCV_LIBRARIES} Threads::Threads)
+    endif()
+    catkin_add_gtest(test_source_control_service
+      test/test_source_control_service.cpp
+      src/h264_decoder.cpp
+      src/h264_encoder.cpp
+      src/jpeg_decoder.cpp
+      src/media_pipeline.cpp
+      src/rtp_h264.cpp
+      src/source_control_service.cpp
+      src/source_state.cpp
+    )
+    if(TARGET test_source_control_service)
+      target_compile_features(test_source_control_service PRIVATE cxx_std_17)
+      target_include_directories(test_source_control_service PRIVATE src test ${OpenCV_INCLUDE_DIRS})
+      target_link_libraries(test_source_control_service
+        XgcXrpc::json_http PkgConfig::FFMPEG ${OpenCV_LIBRARIES} Threads::Threads)
+    endif()
     catkin_add_gtest(test_rtp_h264
       test/test_rtp_h264.cpp
       src/rtp_h264.cpp
