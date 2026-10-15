@@ -84,9 +84,10 @@ assert deb["size"] > 0
 PY
 
 grep -q '^id: xgc2-camera-ros1$' .xgc2/product.yml
-grep -q '^version: 0.4.0-3$' .xgc2/product.yml
-grep -q '^    bionic: 0.4.0-3$' .xgc2/product.yml
-grep -q '^    focal: 0.4.0-3$' .xgc2/product.yml
+grep -Eq '^version: [0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' .xgc2/product.yml
+product_version="$(awk '/^version:/ {print $2; exit}' .xgc2/product.yml)"
+grep -Fqx "    bionic: ${product_version}" .xgc2/product.yml
+grep -Fqx "    focal: ${product_version}" .xgc2/product.yml
 if grep -q '^    focal: .*~focal' .xgc2/product.yml; then
   echo "ROS1 package version must not retain a focal suffix" >&2
   exit 1

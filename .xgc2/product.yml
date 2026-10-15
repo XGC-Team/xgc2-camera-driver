@@ -119,5 +119,5 @@ release:
   workflow: release.yml
   ci_workflow: ci.yml
   apt_versions:
-    bionic: 0.4.0-3
-    focal: 0.4.0-3
+    bionic: 0.4.0-4
+    focal: 0.4.0-4
