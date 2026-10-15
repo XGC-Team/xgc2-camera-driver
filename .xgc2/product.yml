@@ -1,7 +1,7 @@
 schema: xgc2.product.v1
 id: xgc2-camera-ros1
 name: XGC2 ROS1 Camera Driver
-version: 0.4.0-3
+version: 0.4.0-4
 kind: ros1-apt
 summary: ROS1 adapter for the independently released XGC2 Linux camera core.
 ros:

@@ -669,8 +669,8 @@ TEST(SourceControlService, DescribePublishesDistinctSourceAndCalibrationIdentiti
   Client client = fixture.discover();
   const Json description = client.get("/v1/describe").json();
   const Json& facts = description.at("facts");
-  EXPECT_EQ(facts.at("source_id"), "front");
   EXPECT_EQ(facts.at("sourceId"), "front");
+  EXPECT_FALSE(facts.contains("source_id"));
   EXPECT_EQ(facts.at("cameraName"), "usb_front");
 }
 

@@ -370,7 +370,6 @@ Json SourceControlService::factsJson() const
   const auto age = state_->frameAge();
   Json facts = {
       {"source_kind", info.source_kind},
-      {"source_id", options_.source_id},
       {"sourceId", options_.source_id},
       {"cameraName", options_.camera_name},
       {"source_open", state_->open()},
