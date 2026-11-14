@@ -1,0 +1,4 @@
+<launch>
+  <test test-name="frozen_camera_calibration" pkg="xgc2_camera_driver"
+        type="test_frozen_calibration.py" time-limit="45" />
+</launch>

@@ -165,7 +165,8 @@ driver::SourceInfo sourceInfo(const std::string& kind = "synthetic")
 // Everything a camera process wires together, with a test camera feeding it.
 class Fixture {
  public:
-  explicit Fixture(const std::string& kind = "synthetic", const bool open = true)
+  explicit Fixture(const std::string& kind = "synthetic", const bool open = true,
+      std::function<Json(const Json&)> apply_extrinsic = {})
       : state_(sourceInfo(kind)),
         pipeline_(
             [&] {
@@ -191,6 +192,7 @@ class Fixture {
     options.target_id = "test-target";
     options.source_id = "front";
     options.camera_name = "usb_front";
+    options.apply_extrinsic = std::move(apply_extrinsic);
     service_.reset(new driver::SourceControlService(options, &pipeline_, &state_));
     if (open) {
       openSource(kind);
@@ -264,6 +266,15 @@ class Fixture {
 };
 
 const std::string kSource = "/v1/media/sources/front";
+
+Json physicalExtrinsic()
+{
+  return {{"schemaVersion",1},{"resolutionId","resolution-one"},{"cameraName","usb_front"},
+      {"choiceMode","asset"},{"status","calibrated"},{"sourceMode","phy"},
+      {"asset",{{"resourceId","asset"},{"commitId","commit"}}},
+      {"targetCoordinates",{{"frame","world"}}},{"sourceOpticalFrame","test_optical_frame"},
+      {"resolvedOpticalPose",{{"translation",{1,2,3}},{"quaternionXyzw",{0,0,0,1}}}}};
+}
 
 }  // namespace
 
@@ -691,6 +702,44 @@ TEST(SourceControlService, UnknownRoutesMethodsAndSourcesAreRefused)
   EXPECT_EQ(roster.at("sources").size(), 1U);
   EXPECT_EQ(roster.at("sources")[0].at("source_id"), "front");
   EXPECT_EQ(roster.at("sources")[0].at("ready"), true);
+}
+
+TEST(SourceControlService, ExtrinsicApplyUsesFencedIdentityAndKeepsExactIdempotentReceipt)
+{
+  int applied=0;
+  Fixture fixture("synthetic",true,[&](const Json& value) {
+    ++applied;
+    return Json{{"applied",true},{"asset",value.at("asset")},{"resolvedExtrinsic",value},
+                {"frame_id",value.at("sourceOpticalFrame")},{"appliedAtUnixNs","1234"},{"transforms",Json::array()}};
+  });
+  Client client=fixture.discover();
+  auto value=physicalExtrinsic();
+  ASSERT_EQ(client.get(kSource+"/extrinsic").status,405);
+  ASSERT_EQ(Client(fixture.socket(),"").post(kSource+"/extrinsic",value.dump()).status,409);
+  auto wrong=value;wrong["cameraName"]="other";
+  EXPECT_EQ(client.post(kSource+"/extrinsic",wrong.dump()).status,400);
+  wrong=value;wrong["asset"].erase("commitId");
+  EXPECT_EQ(client.post(kSource+"/extrinsic",wrong.dump()).status,400);
+  wrong=value;wrong["sourceMode"]="sim";
+  EXPECT_EQ(client.post(kSource+"/extrinsic",wrong.dump()).status,400);
+  const auto receipt=client.post(kSource+"/extrinsic",value.dump());
+  ASSERT_EQ(receipt.status,200)<<receipt.body;
+  EXPECT_EQ(applied,1);
+  EXPECT_EQ(receipt.json().at("resolvedExtrinsic"),value);
+  EXPECT_EQ(client.post(kSource+"/extrinsic",value.dump()).json(),receipt.json());
+  EXPECT_EQ(applied,1);
+  EXPECT_EQ(client.get(kSource+"/status").json().at("appliedExtrinsic"),receipt.json());
+  wrong=value;wrong["resolvedOpticalPose"]["translation"][0]=9;
+  EXPECT_EQ(client.post(kSource+"/extrinsic",wrong.dump()).status,409);
+  EXPECT_EQ(applied,1);
+}
+
+TEST(SourceControlService, ExtrinsicApplyDoesNotClaimSuccessWithoutActiveOwner)
+{
+  Fixture unavailable("synthetic",false);
+  EXPECT_EQ(unavailable.discover().post(kSource+"/extrinsic",physicalExtrinsic().dump()).status,409);
+  Fixture no_callback;
+  EXPECT_EQ(no_callback.discover().post(kSource+"/extrinsic",physicalExtrinsic().dump()).status,409);
 }
 
 TEST(SourceControlService, AStillAnswersFreshCapturesAtOnce)

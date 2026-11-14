@@ -48,6 +48,11 @@ class MediaOutputs {
 
   void sourceOpened(const SourceInfo& info);
   void sourceClosed(const std::string& reason);
+  using ExtrinsicApply = std::function<xgc2::xrpc::Json(const xgc2::xrpc::Json&)>;
+  void bindExtrinsicOwner(ExtrinsicApply apply);
+  void releaseExtrinsicOwner();
+  std::string appliedExtrinsic() const;
+  void setFrameId(const std::string& frame);
   // One captured MJPEG frame of a live source.
   void frameCaptured(const SourceFrame& frame, std::int64_t ros_time_ns);
   // The single picture of a still scene.
@@ -66,6 +71,9 @@ class MediaOutputs {
   std::atomic<int> preview_subscribers_{0};
   std::mutex frame_id_mutex_;
   std::string frame_id_;
+  mutable std::mutex extrinsic_mutex_;
+  ExtrinsicApply apply_extrinsic_;
+  std::string applied_extrinsic_;
   std::atomic<std::uint64_t> sequence_{0};
   SourceState state_;
   std::unique_ptr<MediaPipeline> pipeline_;
