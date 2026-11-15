@@ -6,6 +6,12 @@ namespace xgc2_camera_driver {
 
 SourceState::SourceState(SourceInfo nominal) : info_(std::move(nominal)) {}
 
+void SourceState::setFrameId(const std::string& frame)
+{
+  { std::lock_guard<std::mutex> lock(mutex_); info_.frame_id = frame; }
+  notify();
+}
+
 void SourceState::bindMaster(const std::string& uri, const std::string& run_id, const int pid)
 {
   {

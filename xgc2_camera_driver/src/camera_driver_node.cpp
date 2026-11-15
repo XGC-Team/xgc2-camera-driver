@@ -383,6 +383,11 @@ class CameraDriverNode {
         start_wall_time_(ros::WallTime::now())
   {
     loadParameters();
+#ifdef XGC2_CAMERA_MEDIA
+    if (media_ && !media_->appliedExtrinsic().empty()) {
+      resolved_extrinsic_json_ = media_->appliedExtrinsic();
+    }
+#endif
     const bool still = source_kind_ == SourceKind::Still;
     if (still) {
       openStill();
@@ -390,10 +395,10 @@ class CameraDriverNode {
       camera_info_manager_.reset(new camera_info_manager::CameraInfoManager(
           nh_, camera_name_, camera_info_url_));
       openCaptureSource();
-      const sensor_msgs::CameraInfo calibration =
-          camera_info_manager_->getCameraInfo();
+      prepareFrozenCalibration();
+      const sensor_msgs::CameraInfo calibration = cameraInfo();
       xgc2_camera_driver::validateCalibrationGeometry(
-          camera_info_manager_->isCalibrated(),
+          isCalibrated(),
           calibration.width,
           calibration.height,
           width_,
@@ -425,10 +430,19 @@ class CameraDriverNode {
             ? video_device_
             : (still ? still_image_ : "synthetic"));
     updater_.add("camera stream", this, &CameraDriverNode::diagnose);
+#ifdef XGC2_CAMERA_MEDIA
+    if (media_ && !still) {
+      media_->setFrameId(frame_id_);
+      media_->bindExtrinsicOwner([this](const xgc2::xrpc::Json& resolved) { return applyLiveExtrinsic(resolved); });
+    }
+#endif
   }
 
   ~CameraDriverNode()
   {
+#ifdef XGC2_CAMERA_MEDIA
+    if (media_) media_->releaseExtrinsicOwner();
+#endif
     if (source_) {
       source_->stop();
     }
@@ -457,6 +471,12 @@ class CameraDriverNode {
     }
 
     source_->start();
+    if (static_broadcaster_) {
+      const ros::Time stamp = ros::Time::now();
+      static_broadcaster_->sendTransform(std::vector<geometry_msgs::TransformStamped>{
+          toTransformMessage(still_transforms_.parent_to_link, stamp),
+          toTransformMessage(still_transforms_.link_to_optical, stamp)});
+    }
     startPublisher();
     running_.store(true);
     mediaOpened();
@@ -518,6 +538,8 @@ class CameraDriverNode {
         "frame_id", frame_id_, "usb_cam_optical_frame");
     private_nh_.param<std::string>(
         "camera_info_file", camera_info_file_, "");
+    private_nh_.param<std::string>("intrinsic_json", intrinsic_json_, "");
+    private_nh_.param<std::string>("resolved_extrinsic_json", resolved_extrinsic_json_, "");
     private_nh_.param<std::string>("still_image", still_image_, "");
     private_nh_.param<std::string>(
         "still_intrinsic_file", still_intrinsic_file_, "");
@@ -566,7 +588,7 @@ class CameraDriverNode {
           "frame_id must be valid");
     }
     camera_name_ = xgc2_camera_driver::validateStableCameraName(camera_name_);
-    if (!camera_info_file_.empty()) {
+    if (!camera_info_file_.empty() && intrinsic_json_.empty()) {
       if (source_kind_ == SourceKind::Still) {
         throw std::invalid_argument(
             "camera_info_file is not used with source_kind=still; the "
@@ -634,6 +656,76 @@ class CameraDriverNode {
     native_pixel_format_ = source_->pixel_format();
   }
 
+  sensor_msgs::CameraInfo cameraInfo() const
+  {
+    return intrinsic_json_.empty() ? camera_info_manager_->getCameraInfo() : frozen_camera_info_;
+  }
+
+  bool isCalibrated() const
+  {
+    return !intrinsic_json_.empty() || (camera_info_manager_ && camera_info_manager_->isCalibrated());
+  }
+
+  void prepareFrozenCalibration()
+  {
+    if (!intrinsic_json_.empty()) {
+      const auto intrinsic = xgc2_camera_driver::parseIntrinsicJson(intrinsic_json_);
+      frozen_camera_info_.width = intrinsic.width;
+      frozen_camera_info_.height = intrinsic.height;
+      frozen_camera_info_.distortion_model = intrinsic.distortion_model;
+      frozen_camera_info_.D = intrinsic.distortion;
+      const auto& k = intrinsic.camera_matrix;
+      std::copy(k.begin(), k.end(), frozen_camera_info_.K.begin());
+      std::copy(intrinsic.rectification.begin(), intrinsic.rectification.end(), frozen_camera_info_.R.begin());
+      std::copy(intrinsic.projection.begin(), intrinsic.projection.end(), frozen_camera_info_.P.begin());
+    }
+    if (!resolved_extrinsic_json_.empty()) {
+      xgc2_camera_driver::Extrinsic extrinsic;
+      if (xgc2_camera_driver::parseResolvedPhysicalExtrinsic(
+              resolved_extrinsic_json_, camera_name_, extrinsic)) {
+        // The resolver already applied the experiment-world offset once.
+        frame_id_ = extrinsic.child_frame;
+        still_transforms_ = xgc2_camera_driver::composeStaticCameraTransforms(extrinsic);
+        static_broadcaster_.reset(new tf2_ros::StaticTransformBroadcaster());
+      }
+    }
+  }
+
+#ifdef XGC2_CAMERA_MEDIA
+  xgc2::xrpc::Json applyLiveExtrinsic(const xgc2::xrpc::Json& resolved)
+  {
+    xgc2_camera_driver::Extrinsic extrinsic;
+    if (!xgc2_camera_driver::parseResolvedPhysicalExtrinsic(resolved.dump(), camera_name_, extrinsic)) {
+      throw std::invalid_argument("live camera extrinsic is not calibrated");
+    }
+    const auto transforms = xgc2_camera_driver::composeStaticCameraTransforms(extrinsic);
+    std::lock_guard<std::recursive_mutex> lock(frame_mutex_);
+    const ros::Time stamp = ros::Time::now();
+    if (!static_broadcaster_) static_broadcaster_.reset(new tf2_ros::StaticTransformBroadcaster());
+    // The one TF owner publishes first; every subsequent frame header below
+    // uses the same optical identity, including queued JPEGs and previews.
+    static_broadcaster_->sendTransform(std::vector<geometry_msgs::TransformStamped>{
+        toTransformMessage(transforms.parent_to_link, stamp),
+        toTransformMessage(transforms.link_to_optical, stamp)});
+    frame_id_ = extrinsic.child_frame;
+    still_transforms_ = transforms;
+    resolved_extrinsic_json_ = resolved.dump();
+    media_->setFrameId(frame_id_);
+    last_stream_info_epoch_ = 0U;
+    std_msgs::Header header;
+    header.stamp = stamp;
+    header.frame_id = frame_id_;
+    publishCameraInfo(header);
+    auto transform_json = [](const xgc2_camera_driver::StaticTransform& value) {
+      return xgc2::xrpc::Json{{"parentFrame",value.parent_frame},{"childFrame",value.child_frame},
+          {"translation",value.translation},{"quaternionXyzw",value.quaternion}};
+    };
+    return xgc2::xrpc::Json{{"applied",true},{"appliedAtUnixNs",std::to_string(ros::WallTime::now().toNSec())},
+        {"asset",resolved.at("asset")},{"frame_id",frame_id_},{"resolvedExtrinsic",resolved},
+        {"transforms",xgc2::xrpc::Json::array({transform_json(transforms.parent_to_link),transform_json(transforms.link_to_optical)})}};
+  }
+#endif
+
   void openStill()
   {
     still_intrinsics_ = xgc2_camera_driver::loadIntrinsics(still_intrinsic_file_);
@@ -670,6 +762,7 @@ class CameraDriverNode {
 
   void publishStill()
   {
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
     const ros::Time stamp = ros::Time::now();
     std_msgs::Header header;
     header.stamp = stamp;
@@ -730,6 +823,7 @@ class CameraDriverNode {
   // Description of the picture source for the camera-source service.
   xgc2_camera_driver::SourceInfo sourceInfo() const
   {
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
     const bool still = source_kind_ == SourceKind::Still;
     xgc2_camera_driver::SourceInfo info;
     info.source_kind = source_kind_name_;
@@ -742,8 +836,8 @@ class CameraDriverNode {
       info.calibrated = true;
       info.camera_matrix = still_intrinsics_.camera_matrix;
       info.distortion = still_intrinsics_.distortion;
-    } else if (camera_info_manager_ && camera_info_manager_->isCalibrated()) {
-      const sensor_msgs::CameraInfo calibration = camera_info_manager_->getCameraInfo();
+    } else if (isCalibrated()) {
+      const sensor_msgs::CameraInfo calibration = cameraInfo();
       std::copy(calibration.K.begin(), calibration.K.end(), info.camera_matrix.begin());
       info.distortion = calibration.D;
       info.calibrated = true;
@@ -760,6 +854,7 @@ class CameraDriverNode {
 
   void mediaOpened()
   {
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
 #ifdef XGC2_CAMERA_MEDIA
     if (media_) {
       media_->sourceOpened(sourceInfo());
@@ -841,6 +936,7 @@ class CameraDriverNode {
                                   compressed_image_publisher_.getNumSubscribers() > 0U;
     if (!native_encoded && !publish_raw && !publish_raw_jpeg &&
         camera_info_publisher_.getNumSubscribers() > 0U) {
+      std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
       std_msgs::Header header;
       header.seq = static_cast<std::uint32_t>(frame.sequence);
       header.stamp = rosTimeFromNanoseconds(mapping.ros_time_ns);
@@ -983,6 +1079,7 @@ class CameraDriverNode {
   void publishRawFrame(const SourceFrame& frame, const Mapping& mapping, const bool publish_raw)
   {
     const cv::Mat bgr = decodeToBgr(frame);
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
     std_msgs::Header header;
     header.seq = static_cast<std::uint32_t>(frame.sequence);
     header.stamp = rosTimeFromNanoseconds(mapping.ros_time_ns);
@@ -1069,6 +1166,7 @@ class CameraDriverNode {
 
   void publishEncodedPacket(const EncodedPacket& packet)
   {
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
     const ros::Time stamp =
         rosTimeFromNanoseconds(packet.mapping.ros_time_ns);
     std_msgs::Header header;
@@ -1094,6 +1192,7 @@ class CameraDriverNode {
 
   void publishStreamInfo(const EncodedPacket& packet)
   {
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
     xgc_camera_msgs::StreamInfo info;
     info.contract_version =
         xgc_camera_msgs::StreamInfo::CONTRACT_VERSION_CURRENT;
@@ -1122,6 +1221,7 @@ class CameraDriverNode {
       const EncodedPacket& packet,
       const ros::Time& source_time)
   {
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
     xgc_camera_msgs::FrameTiming timing;
     timing.source_time = source_time;
     timing.source_time_valid = packet.mapping.valid;
@@ -1155,12 +1255,11 @@ class CameraDriverNode {
 
   void publishCameraInfo(const std_msgs::Header& header)
   {
-    sensor_msgs::CameraInfo camera_info =
-        camera_info_manager_->getCameraInfo();
+    sensor_msgs::CameraInfo camera_info = cameraInfo();
     camera_info.header = header;
     camera_info.width = width_;
     camera_info.height = height_;
-    if (!camera_info_manager_->isCalibrated()) {
+    if (!isCalibrated()) {
       const auto pinhole = xgc2_camera_driver::defaultUncalibratedPinhole(
           width_, height_);
       camera_info.distortion_model = "plumb_bob";
@@ -1194,6 +1293,7 @@ class CameraDriverNode {
   void diagnose(
       diagnostic_updater::DiagnosticStatusWrapper& status)
   {
+    std::lock_guard<std::recursive_mutex> frame_lock(frame_mutex_);
     const std::uint64_t raw_count = raw_frame_count_.load();
     const std::uint64_t encoded_count = encoded_frame_count_.load();
     const std::uint64_t count = raw_count + encoded_count;
@@ -1214,7 +1314,7 @@ class CameraDriverNode {
 
     const bool still = source_kind_ == SourceKind::Still;
     const bool calibrated =
-        still || (camera_info_manager_ && camera_info_manager_->isCalibrated());
+        still || isCalibrated();
     if (!running_.load()) {
       status.summary(
           diagnostic_msgs::DiagnosticStatus::ERROR,
@@ -1308,6 +1408,9 @@ class CameraDriverNode {
   std::unique_ptr<camera_info_manager::CameraInfoManager>
       camera_info_manager_;
   diagnostic_updater::Updater updater_;
+  std::string intrinsic_json_;
+  std::string resolved_extrinsic_json_;
+  sensor_msgs::CameraInfo frozen_camera_info_;
   std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_broadcaster_;
   std::unique_ptr<xgc2_camera_driver::CaptureSource> source_;
 
@@ -1320,6 +1423,7 @@ class CameraDriverNode {
   std::string camera_name_;
   std::string stream_id_;
   std::string frame_id_;
+  mutable std::recursive_mutex frame_mutex_;
   std::string camera_info_file_;
   std::string camera_info_url_;
   std::string still_image_;

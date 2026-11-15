@@ -243,6 +243,16 @@
             "type": "string",
             "description": "Execution target identity shared with the local Media Edge. Empty uses the host name for standalone operation.",
             "default": ""
+          },
+          "intrinsicJson": {
+            "type": "string",
+            "default": "",
+            "description": "Frozen Core camera intrinsic document; no mutable file lookup."
+          },
+          "resolvedExtrinsicJson": {
+            "type": "string",
+            "default": "",
+            "description": "Frozen physical camera extrinsic after experiment-world offset resolution; uncalibrated publishes no TF."
           }
         },
         "groups": [
@@ -319,7 +329,9 @@
           "_preview_max_width:=${previewMaxWidth}",
           "_preview_max_height:=${previewMaxHeight}",
           "_preview_bitrate:=${previewBitrate}",
-          "_target_id:=${targetId}"
+          "_target_id:=${targetId}",
+          "_intrinsic_json:=${intrinsicJson}",
+          "_resolved_extrinsic_json:=${resolvedExtrinsicJson}"
         ],
         "env": {
           "ROS_MASTER_URI": "${rosMasterUri}",

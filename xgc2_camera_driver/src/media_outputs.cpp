@@ -157,15 +157,13 @@ MediaOutputs::MediaOutputs(MediaOutputsConfig config)
   pipeline_.reset(new MediaPipeline(
       config.pipeline,
       [this](PreviewUnit&& unit) {
+        std::lock_guard<std::mutex> frame_lock(frame_id_mutex_);
         if (preview_subscribers_.load() <= 0) {
           return;
         }
         foxglove_msgs::CompressedVideo message;
         message.timestamp.fromNSec(static_cast<std::uint64_t>(std::max<std::int64_t>(unit.ros_time_ns, 0)));
-        {
-          std::lock_guard<std::mutex> lock(frame_id_mutex_);
-          message.frame_id = frame_id_;
-        }
+        message.frame_id = frame_id_;
         message.format = "h264";
         message.data = std::move(unit.data);
         preview_publisher_.publish(message);
@@ -190,6 +188,13 @@ MediaOutputs::MediaOutputs(MediaOutputsConfig config)
     options.target_id = config.target_id;
     options.source_id = config.source_id;
     options.camera_name = config.camera_name;
+    options.apply_extrinsic = [this](const xgc2::xrpc::Json& resolved) {
+      std::lock_guard<std::mutex> lock(extrinsic_mutex_);
+      if (!apply_extrinsic_) throw std::runtime_error("the camera transform owner is unavailable");
+      auto receipt = apply_extrinsic_(resolved);
+      applied_extrinsic_ = resolved.dump();
+      return receipt;
+    };
     service_.reset(new SourceControlService(options, pipeline_.get(), &state_));
     ROS_INFO_STREAM(
         "XGC2 camera-source service on " << config.control_socket
@@ -250,6 +255,30 @@ void MediaOutputs::sourceOpened(const SourceInfo& info)
 void MediaOutputs::sourceClosed(const std::string& reason)
 {
   state_.sourceClosed(reason);
+}
+
+void MediaOutputs::bindExtrinsicOwner(ExtrinsicApply apply)
+{
+  std::lock_guard<std::mutex> lock(extrinsic_mutex_);
+  apply_extrinsic_ = std::move(apply);
+}
+
+void MediaOutputs::releaseExtrinsicOwner()
+{
+  std::lock_guard<std::mutex> lock(extrinsic_mutex_);
+  apply_extrinsic_ = nullptr;
+}
+
+std::string MediaOutputs::appliedExtrinsic() const
+{
+  std::lock_guard<std::mutex> lock(extrinsic_mutex_);
+  return applied_extrinsic_;
+}
+
+void MediaOutputs::setFrameId(const std::string& frame)
+{
+  { std::lock_guard<std::mutex> lock(frame_id_mutex_); frame_id_ = frame; }
+  state_.setFrameId(frame);
 }
 
 void MediaOutputs::frameCaptured(const SourceFrame& frame, const std::int64_t ros_time_ns)

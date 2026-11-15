@@ -37,6 +37,9 @@ class SourceControlService {
     std::string camera_name;
     // Where the stream goes; reported by the descriptor.
     std::uint8_t rtp_payload_type{96};
+    // Invoked synchronously on the serialized service thread. The owner must
+    // publish the transform before returning the exact applied receipt.
+    std::function<xgc2::xrpc::Json(const xgc2::xrpc::Json&)> apply_extrinsic;
   };
 
   // Throws std::runtime_error when the socket cannot be bound.
@@ -71,6 +74,7 @@ class SourceControlService {
   void sourceStatus(const xgc2::xrpc::HttpReply& reply) const;
   void sourceConfig(const xgc2::xrpc::HttpReply& reply) const;
   void patchConfig(const xgc2::xrpc::Json& body, const xgc2::xrpc::HttpReply& reply);
+  void applyExtrinsic(const xgc2::xrpc::Json& body, const xgc2::xrpc::HttpReply& reply);
   void lifecycle(const std::string& operation, const xgc2::xrpc::HttpReply& reply);
   void capture(const xgc2::xrpc::Json& body, const xgc2::xrpc::HttpRequest& request,
                const xgc2::xrpc::HttpReply& reply);
@@ -96,6 +100,8 @@ class SourceControlService {
   MediaPipeline* const pipeline_;
   SourceState* const state_;
   std::atomic<std::uint64_t> revision_{1};
+  xgc2::xrpc::Json applied_extrinsic_ = nullptr; // serialized service thread only
+  std::mutex calibration_mutex_; // capture metadata and live apply share one cut
   std::atomic<bool> stopping_{false};
   std::atomic<bool> capture_in_flight_{false};
   // Held calls, answered by the service thread when their condition arrives.

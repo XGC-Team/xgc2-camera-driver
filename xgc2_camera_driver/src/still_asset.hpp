@@ -14,6 +14,8 @@ struct Intrinsics {
   std::array<double, 9> camera_matrix{};
   std::string distortion_model;
   std::vector<double> distortion;
+  std::array<double, 9> rectification{};
+  std::array<double, 12> projection{};
 };
 
 // Pose of the camera optical frame in its parent frame (schema
@@ -60,6 +62,11 @@ CameraStaticTransforms composeStaticCameraTransforms(
 // All loaders throw std::invalid_argument with an operator-readable message.
 Intrinsics loadIntrinsics(const std::string& path);
 Extrinsic loadExtrinsic(const std::string& path);
+// Immutable Core camera-context bytes. No files or global latest selection are read.
+Intrinsics parseIntrinsicJson(const std::string& payload);
+bool parseResolvedPhysicalExtrinsic(const std::string& payload,
+                                    const std::string& camera_name,
+                                    Extrinsic& result);
 
 struct StillImage {
   // JPEG bytes published as they are. A JPEG input is kept byte for byte; a

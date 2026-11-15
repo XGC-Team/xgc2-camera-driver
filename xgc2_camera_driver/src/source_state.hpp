@@ -51,6 +51,7 @@ class SourceState {
   // The source is open: actual geometry and calibration replace the nominal.
   void sourceOpened(const SourceInfo& info);
   void bindMaster(const std::string& uri, const std::string& run_id, int pid);
+  void setFrameId(const std::string& frame);
   // The source is lost; not ready until it reopens and delivers a frame.
   void sourceClosed(const std::string& reason);
   void framePublished(std::shared_ptr<const CaptureFrame> frame);

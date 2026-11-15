@@ -1,4 +1,5 @@
 #include "source_control_service.hpp"
+#include "still_asset.hpp"
 
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -335,6 +336,10 @@ void SourceControlService::route(const HttpRequest& request, const HttpReply& re
     }
     return patchConfig(body, reply);
   }
+  if (operation == "extrinsic") {
+    if (!post_method) return fail(reply, 405, "method_not_allowed", "extrinsic is POST");
+    return applyExtrinsic(body, reply);
+  }
   if (operation == "start" || operation == "stop" || operation == "request-keyframe") {
     if (!post_method) {
       return fail(reply, 405, "method_not_allowed", operation + " is POST");
@@ -349,6 +354,49 @@ void SourceControlService::route(const HttpRequest& request, const HttpReply& re
     return capture(body, request, reply);
   }
   return fail(reply, 404, "not_found", "camera route not found");
+}
+
+void SourceControlService::applyExtrinsic(const Json& body, const HttpReply& reply)
+{
+  std::lock_guard<std::mutex> calibration_lock(calibration_mutex_);
+  requireFields(body, {"schemaVersion", "resolutionId", "cameraName", "choiceMode", "status",
+      "targetCoordinates", "asset", "sourceMode", "sourceOpticalFrame", "sourceCoordinates",
+      "originalOpticalPose", "resolvedOpticalPose"});
+  Extrinsic extrinsic;
+  if (!parseResolvedPhysicalExtrinsic(body.dump(), options_.camera_name, extrinsic) ||
+      !body.contains("choiceMode") || !body.at("choiceMode").is_string() || body.at("choiceMode") != "asset" ||
+      !body.contains("asset") || !body.at("asset").is_object() ||
+      !body.at("asset").contains("resourceId") || !body.at("asset").at("resourceId").is_string() ||
+      body.at("asset").at("resourceId").get<std::string>().empty() ||
+      !body.at("asset").contains("commitId") || !body.at("asset").at("commitId").is_string() ||
+      body.at("asset").at("commitId").get<std::string>().empty() ||
+      !body.contains("resolutionId") || !body.at("resolutionId").is_string() ||
+      body.at("resolutionId").get<std::string>().empty()) {
+    throw std::invalid_argument("live extrinsic requires one resolved physical asset pin");
+  }
+  requireFields(body.at("asset"), {"resourceId", "commitId"});
+  if (!safeIdentifier(body.at("resolutionId").get<std::string>()) ||
+      !safeIdentifier(body.at("asset").at("resourceId").get<std::string>()) ||
+      !safeIdentifier(body.at("asset").at("commitId").get<std::string>())) {
+    throw std::invalid_argument("resolved asset identity is invalid");
+  }
+  (void)composeStaticCameraTransforms(extrinsic);
+  if (!applied_extrinsic_.is_null() &&
+      applied_extrinsic_.at("resolvedExtrinsic").at("resolutionId") == body.at("resolutionId")) {
+    if (applied_extrinsic_.at("resolvedExtrinsic") != body) {
+      return fail(reply, 409, "resolution_conflict", "resolutionId already identifies another transform");
+    }
+    return respond(reply, 200, applied_extrinsic_);
+  }
+  if (!state_->open() || !options_.apply_extrinsic) {
+    return fail(reply, 409, "source_unavailable", "the camera has no active transform owner");
+  }
+  Json receipt = options_.apply_extrinsic(body);
+  receipt["ok"] = true;
+  receipt["source_id"] = options_.source_id;
+  receipt["instance_id"] = instance_id_;
+  applied_extrinsic_ = receipt;
+  respond(reply, 200, receipt);
 }
 
 Json SourceControlService::serviceRef() const
@@ -513,6 +561,7 @@ void SourceControlService::sourceStatus(const HttpReply& reply) const
       {"desired_revision", revision},
       {"applied_revision", revision},
       {"persisted_revision", nullptr},
+      {"appliedExtrinsic", applied_extrinsic_},
       {"native", native},
   };
   if (!status.last_error.empty()) {
@@ -754,6 +803,7 @@ void SourceControlService::processWaiters()
 void SourceControlService::deliverCapture(
     const Json& request, const std::shared_ptr<const CaptureFrame>& frame, const HttpReply& reply)
 {
+  std::lock_guard<std::mutex> calibration_lock(calibration_mutex_);
   struct Release {
     std::atomic<bool>* flag;
     ~Release() { flag->store(false); }
