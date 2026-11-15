@@ -71,7 +71,7 @@ docker run --rm \
     install -d -m 0755 /etc/apt/keyrings
     curl -fsSL --retry 3 https://xgc2.apt.xiaokang.ink/xgc2-archive-keyring.gpg \
       -o /etc/apt/keyrings/xgc2-archive-keyring.gpg
-    fingerprints="$(gpg --batch --show-keys --with-colons /etc/apt/keyrings/xgc2-archive-keyring.gpg \
+    fingerprints="$(gpg --batch --no-default-keyring --keyring /etc/apt/keyrings/xgc2-archive-keyring.gpg --with-colons --fingerprint \
       | grep "^fpr:" | cut -d: -f10)"
     test "${fingerprints}" = 2A8E11B36F56D307ADF626D85E5FDC30979EA43F
     chmod 0644 /etc/apt/keyrings/xgc2-archive-keyring.gpg
