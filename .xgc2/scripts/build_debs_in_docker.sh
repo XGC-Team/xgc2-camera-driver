@@ -68,7 +68,14 @@ docker run --rm \
       done
     fi
 
-    echo "deb [trusted=yes arch=$(dpkg --print-architecture)] https://xgc2.apt.xiaokang.ink ${suite} main" >/etc/apt/sources.list.d/xgc2.list
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL --retry 3 https://xgc2.apt.xiaokang.ink/xgc2-archive-keyring.gpg \
+      -o /etc/apt/keyrings/xgc2-archive-keyring.gpg
+    fingerprints="$(gpg --batch --show-keys --with-colons /etc/apt/keyrings/xgc2-archive-keyring.gpg \
+      | grep "^fpr:" | cut -d: -f10)"
+    test "${fingerprints}" = 2A8E11B36F56D307ADF626D85E5FDC30979EA43F
+    chmod 0644 /etc/apt/keyrings/xgc2-archive-keyring.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/xgc2-archive-keyring.gpg arch=$(dpkg --print-architecture)] https://xgc2.apt.xiaokang.ink ${suite} main" >/etc/apt/sources.list.d/xgc2.list
     if [[ -n "${XGC2_APT_OVERLAY_URL:-}" ]]; then
       sed "s#https://xgc2.apt.xiaokang.ink#${XGC2_APT_OVERLAY_URL%/}#g" /etc/apt/sources.list.d/xgc2.list >/etc/apt/sources.list.d/00-xgc2-release-train.list
     fi
