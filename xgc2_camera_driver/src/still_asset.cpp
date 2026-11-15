@@ -307,6 +307,52 @@ Extrinsic loadExtrinsic(const std::string& path)
   return result;
 }
 
+Intrinsics parseIntrinsicJson(const std::string& payload)
+{
+  const YAML::Node document = YAML::Load(payload);
+  Intrinsics result;
+  result.width = requirePositiveInteger(document["image_width"], "intrinsic image_width");
+  result.height = requirePositiveInteger(document["image_height"], "intrinsic image_height");
+  const auto matrix = requireMatrix(document, "camera_matrix", "intrinsic", 3U, 3U);
+  std::copy(matrix.begin(), matrix.end(), result.camera_matrix.begin());
+  result.distortion_model = requireText(document["distortion_model"], "intrinsic distortion_model");
+  result.distortion = requireMatrix(document, "distortion_coefficients", "intrinsic", 1U, 0U);
+  const auto rectification = requireMatrix(document, "rectification_matrix", "intrinsic", 3U, 3U);
+  const auto projection = requireMatrix(document, "projection_matrix", "intrinsic", 3U, 4U);
+  std::copy(rectification.begin(), rectification.end(), result.rectification.begin());
+  std::copy(projection.begin(), projection.end(), result.projection.begin());
+  return result;
+}
+
+bool parseResolvedPhysicalExtrinsic(const std::string& payload,
+                                    const std::string& camera_name,
+                                    Extrinsic& result)
+{
+  const YAML::Node document = YAML::Load(payload);
+  if (requirePositiveInteger(document["schemaVersion"], "resolved schemaVersion") != 1U ||
+      requireText(document["cameraName"], "resolved cameraName") != camera_name) {
+    fail("resolved physical camera identity differs from the source");
+  }
+  const std::string status = requireText(document["status"], "resolved status");
+  if (status == "uncalibrated") return false;
+  if (status != "calibrated" ||
+      requireText(document["sourceMode"], "resolved sourceMode") != "phy") {
+    fail("a physical camera requires a physical extrinsic calibration");
+  }
+  result.parent_frame = requireText(document["targetCoordinates"]["frame"], "resolved parent frame");
+  result.child_frame = requireText(document["sourceOpticalFrame"], "resolved optical frame");
+  const auto pose = document["resolvedOpticalPose"];
+  const auto translation = pose["translation"], rotation = pose["quaternionXyzw"];
+  if (!translation.IsSequence() || translation.size() != 3U ||
+      !rotation.IsSequence() || rotation.size() != 4U) {
+    fail("resolved optical pose must contain translation[3] and quaternionXyzw[4]");
+  }
+  for (std::size_t i = 0; i < 3U; ++i) result.translation[i] = requireNumber(translation[i], "resolved translation");
+  for (std::size_t i = 0; i < 4U; ++i) result.quaternion[i] = requireNumber(rotation[i], "resolved quaternion");
+  result.quaternion = quaternionNormalize(result.quaternion);
+  return true;
+}
+
 StillImage loadStillImage(
     const std::string& path, const Intrinsics& intrinsics, const int jpeg_quality)
 {

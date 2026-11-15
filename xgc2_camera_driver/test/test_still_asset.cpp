@@ -312,3 +312,29 @@ int main(int argc, char** argv)
   testing::AddGlobalTestEnvironment(new RemoveTestDirectory());
   return RUN_ALL_TESTS();
 }
+
+TEST(FrozenCameraCalibration, UsesResolvedPhysicalPoseAndDoesNotInventMissingTF)
+{
+  driver::Extrinsic pose;
+  EXPECT_FALSE(driver::parseResolvedPhysicalExtrinsic(
+      R"({"schemaVersion":1,"cameraName":"world","status":"uncalibrated"})", "world", pose));
+  const std::string value = R"({"schemaVersion":1,"cameraName":"world","status":"calibrated","sourceMode":"phy","targetCoordinates":{"frame":"world"},"sourceOpticalFrame":"usb_cam_optical_frame","resolvedOpticalPose":{"translation":[3,4,5],"quaternionXyzw":[0,0,0,1]}})";
+  ASSERT_TRUE(driver::parseResolvedPhysicalExtrinsic(value, "world", pose));
+  const auto transforms = driver::composeStaticCameraTransforms(pose);
+  EXPECT_EQ(transforms.parent_to_link.parent_frame, "world");
+  EXPECT_EQ(transforms.link_to_optical.child_frame, "usb_cam_optical_frame");
+  EXPECT_EQ(transforms.parent_to_link.translation, (std::array<double, 3>{{3,4,5}}));
+  EXPECT_THROW(driver::parseResolvedPhysicalExtrinsic(value, "different", pose), std::invalid_argument);
+  std::string simulation = value;
+  simulation.replace(simulation.find("phy"), 3, "sim");
+  EXPECT_THROW(driver::parseResolvedPhysicalExtrinsic(simulation, "world", pose), std::invalid_argument);
+}
+
+TEST(FrozenCameraCalibration, ReadsIntrinsicDocumentWithoutFilesystem)
+{
+  const auto intrinsic = driver::parseIntrinsicJson(R"({"image_width":640,"image_height":480,"camera_matrix":{"rows":3,"cols":3,"data":[500,0,320,0,501,240,0,0,1]},"distortion_model":"plumb_bob","distortion_coefficients":{"rows":1,"cols":5,"data":[0.1,0,0,0,0]},"rectification_matrix":{"rows":3,"cols":3,"data":[1,0,0,0,1,0,0,0,1]},"projection_matrix":{"rows":3,"cols":4,"data":[500,0,320,0,0,501,240,0,0,0,1,0]}})");
+  EXPECT_EQ(intrinsic.width, 640U);
+  EXPECT_EQ(intrinsic.height, 480U);
+  EXPECT_DOUBLE_EQ(intrinsic.camera_matrix[4], 501);
+  EXPECT_DOUBLE_EQ(intrinsic.distortion[0], 0.1);
+}

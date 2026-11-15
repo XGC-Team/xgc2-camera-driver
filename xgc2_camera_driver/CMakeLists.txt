@@ -177,12 +177,13 @@ if(CATKIN_ENABLE_TESTING)
       src/rtp_h264.cpp
       src/source_control_service.cpp
       src/source_state.cpp
+      src/still_asset.cpp
     )
     if(TARGET test_source_control_service)
       target_compile_features(test_source_control_service PRIVATE cxx_std_17)
       target_include_directories(test_source_control_service PRIVATE src test ${OpenCV_INCLUDE_DIRS})
       target_link_libraries(test_source_control_service
-        XgcXrpc::json_http PkgConfig::FFMPEG ${OpenCV_LIBRARIES} Threads::Threads)
+        XgcXrpc::json_http PkgConfig::FFMPEG ${OpenCV_LIBRARIES} ${YAML_CPP_LIBRARIES} Threads::Threads)
     endif()
     catkin_add_gtest(test_rtp_h264
       test/test_rtp_h264.cpp
@@ -210,6 +211,7 @@ if(CATKIN_ENABLE_TESTING)
     add_rostest(test/image_pipe.test)
     if(XGC2_CAMERA_MEDIA)
       add_rostest(test/media_driver.test)
+      add_rostest(test/frozen_calibration.test)
       add_rostest(test/process_definitions.test)
     endif()
   endif()
